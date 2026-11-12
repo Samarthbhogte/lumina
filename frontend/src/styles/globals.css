@@ -10,9 +10,10 @@
   --surface: #ffffff;
   --surface-2: #f0ede6;
   --ink: #1c1b19;
-  --muted: #6b675f;
-  --faint: #8f8a80;
+  --muted: #5c5851;
+  --faint: #6e6a62; /* >= 4.6:1 on every light surface */
   --line: #e3ded4;
+  --field: #948e83; /* input boundary, >= 3:1 on surface */
   --accent: #9a5706;
   --accent-soft: #f6e7cf;
   --ring: #c27a17;
@@ -29,9 +30,10 @@
   --surface: #1c1b18;
   --surface-2: #26241f;
   --ink: #edeae3;
-  --muted: #a39e93;
-  --faint: #7d786e;
+  --muted: #b3ada2;
+  --faint: #928d83; /* >= 4.7:1 on every dark surface */
   --line: #34312b;
+  --field: #6f6a60;
   --accent: #e3a74d;
   --accent-soft: #3a2c17;
   --ring: #e3a74d;
@@ -51,6 +53,7 @@
   --color-muted: var(--muted);
   --color-faint: var(--faint);
   --color-line: var(--line);
+  --color-field: var(--field);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-ring: var(--ring);
@@ -157,6 +160,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .streaming-caret::after {
+    animation: none;
+  }
   *,
   *::before,
   *::after {

@@ -15,6 +15,7 @@ export interface AssistantMessage {
   sources: Source[]
   result?: AskResult
   error?: string
+  stopped?: boolean
 }
 
 export type Message = UserMessage | AssistantMessage

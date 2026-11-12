@@ -129,25 +129,44 @@ export async function askStream(
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
   let finished = false
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += value
-    let split: number
-    while ((split = buffer.indexOf('\n\n')) !== -1) {
-      const block = buffer.slice(0, split)
-      buffer = buffer.slice(split + 2)
-      const event = /^event: (.+)$/m.exec(block)?.[1]
-      const data = /^data: (.*)$/m.exec(block)?.[1]
-      if (!event || data === undefined) continue
-      const payload = JSON.parse(data)
-      if (event === 'sources') handlers.onSources(payload)
-      else if (event === 'token') handlers.onToken(payload.text)
-      else if (event === 'done') {
-        finished = true
-        handlers.onDone(payload)
-      } else if (event === 'error') throw new ApiError(payload.message, 502)
+
+  const handle = (block: string) => {
+    let event = 'message'
+    const data: string[] = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith(':')) continue // comment / heartbeat
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
     }
+    if (!data.length) return
+    let payload
+    try {
+      payload = JSON.parse(data.join('\n'))
+    } catch {
+      throw new ApiError('The server sent a malformed response.', 502)
+    }
+    if (event === 'sources') handlers.onSources(payload)
+    else if (event === 'token') handlers.onToken(payload.text)
+    else if (event === 'done') {
+      finished = true
+      handlers.onDone(payload)
+    } else if (event === 'error') throw new ApiError(payload.message, 502)
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer = (buffer + value).replace(/\r\n?/g, '\n')
+      let split: number
+      while ((split = buffer.indexOf('\n\n')) !== -1) {
+        handle(buffer.slice(0, split))
+        buffer = buffer.slice(split + 2)
+      }
+    }
+    if (buffer.trim()) handle(buffer)
+  } finally {
+    reader.cancel().catch(() => {})
   }
   if (!finished) throw new ApiError('The answer was cut off. Please try again.', 0)
 }

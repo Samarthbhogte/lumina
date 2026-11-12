@@ -14,13 +14,12 @@ const OPTIONS = [
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
   return (
-    <div role="radiogroup" aria-label="Theme" className="flex rounded-md border border-line p-0.5">
+    <div role="group" aria-label="Theme" className="flex rounded-md border border-line p-0.5">
       {OPTIONS.map(({ value, label, Icon }) => (
         <button
           key={value}
           type="button"
-          role="radio"
-          aria-checked={theme === value}
+          aria-pressed={theme === value}
           aria-label={label}
           title={label}
           onClick={() => setTheme(value)}

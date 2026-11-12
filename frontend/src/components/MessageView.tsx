@@ -1,7 +1,7 @@
 'use client'
 
 import { Check, ChevronDown, Copy, RotateCcw, TriangleAlert } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AnswerMarkdown } from './AnswerMarkdown'
 import { ConfidenceBadge } from './ConfidenceBadge'
@@ -10,13 +10,13 @@ import type { AssistantMessage, Message } from './types'
 
 interface Props {
   message: Message
-  active: boolean
-  activeSource: number | null
+  activeSource: number | null // null unless this message is the one shown in the sources panel
+  canRetry: boolean
   onCite: (messageId: string, n: number) => void
   onRetry: (message: AssistantMessage) => void
 }
 
-export function MessageView({ message, active, activeSource, onCite, onRetry }: Props) {
+function MessageViewImpl({ message, activeSource, canRetry, onCite, onRetry }: Props) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -29,32 +29,34 @@ export function MessageView({ message, active, activeSource, onCite, onRetry }: 
   return (
     <AssistantView
       message={message}
-      active={active}
       activeSource={activeSource}
+      canRetry={canRetry}
       onCite={onCite}
       onRetry={onRetry}
     />
   )
 }
 
-function AssistantView({
-  message,
-  active,
-  activeSource,
-  onCite,
-  onRetry,
-}: Props & { message: AssistantMessage }) {
+export const MessageView = memo(MessageViewImpl)
+
+function AssistantView({ message, activeSource, canRetry, onCite, onRetry }: Props & { message: AssistantMessage }) {
   const [copied, setCopied] = useState(false)
   const [showSources, setShowSources] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
   const valid = useMemo(() => new Set(message.sources.map((s) => s.n)), [message.sources])
-  const cited = new Set(message.result?.cited ?? [])
+  const cited = useMemo(() => new Set(message.result?.cited ?? []), [message.result])
+  const cite = useCallback((n: number) => onCite(message.id, n), [onCite, message.id])
   const streaming = message.status === 'streaming'
+  const sourceCount = cited.size || message.sources.length
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(message.content)
       setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      clearTimeout(timer.current)
+      timer.current = setTimeout(() => setCopied(false), 1500)
     } catch {
       /* clipboard blocked */
     }
@@ -65,33 +67,38 @@ function AssistantView({
       <p className="mb-1.5 text-xs font-medium tracking-wide text-faint uppercase">Lumina</p>
 
       {streaming && !message.content ? (
-        <p className="flex items-center gap-2 text-sm text-muted" role="status">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-          {message.sources.length
-            ? `Reading ${message.sources.length} passages…`
-            : 'Searching your documents…'}
+        <p className="flex items-center gap-2 text-sm text-muted">
+          <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+          {message.sources.length ? `Reading ${message.sources.length} passages…` : 'Searching your documents…'}
         </p>
       ) : (
         <AnswerMarkdown
           text={message.content}
           validSources={valid}
-          activeSource={active ? activeSource : null}
-          onCite={(n) => onCite(message.id, n)}
+          activeSource={activeSource}
+          onCite={cite}
           streaming={streaming}
         />
       )}
 
+      {message.stopped && <p className="mt-2 text-sm text-muted italic">Stopped before the answer finished.</p>}
+
       {message.status === 'error' && (
-        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-bad/30 bg-bad-soft px-3 py-2 text-sm text-bad">
+        <div
+          role="alert"
+          className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-bad/30 bg-bad-soft px-3 py-2 text-sm text-bad"
+        >
           <TriangleAlert size={15} aria-hidden />
           <span className="flex-1">{message.error}</span>
-          <button
-            type="button"
-            onClick={() => onRetry(message)}
-            className="inline-flex items-center gap-1 rounded px-2 py-1 font-medium hover:bg-bad/10"
-          >
-            <RotateCcw size={13} aria-hidden /> Retry
-          </button>
+          {canRetry && (
+            <button
+              type="button"
+              onClick={() => onRetry(message)}
+              className="inline-flex min-h-6 items-center gap-1 rounded px-2 py-1 font-medium hover:bg-bad/10"
+            >
+              <RotateCcw size={13} aria-hidden /> Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -103,19 +110,19 @@ function AssistantView({
               type="button"
               onClick={() => setShowSources((v) => !v)}
               aria-expanded={showSources}
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink xl:hidden"
+              className="inline-flex min-h-6 items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink xl:hidden"
             >
-              {cited.size || message.sources.length} source{(cited.size || message.sources.length) === 1 ? '' : 's'}
+              {sourceCount} source{sourceCount === 1 ? '' : 's'}
               <ChevronDown size={13} aria-hidden className={showSources ? 'rotate-180' : ''} />
             </button>
           )}
           <button
             type="button"
             onClick={copy}
-            className="ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted opacity-100 hover:bg-surface-2 hover:text-ink sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+            className="ml-auto inline-flex min-h-6 items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
           >
             {copied ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
-            {copied ? 'Copied' : 'Copy'}
+            <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
           </button>
         </div>
       )}
@@ -127,8 +134,8 @@ function AssistantView({
               key={s.n}
               source={s}
               cited={cited.size === 0 || cited.has(s.n)}
-              active={active && activeSource === s.n}
-              onSelect={() => onCite(message.id, s.n)}
+              active={activeSource === s.n}
+              onSelect={() => cite(s.n)}
             />
           ))}
         </ul>

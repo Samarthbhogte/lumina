@@ -30,9 +30,10 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
         <button
           type="button"
           onClick={onSelect}
-          aria-label={`Highlight source ${source.n}`}
+          aria-label={`Source ${source.n}`}
+          aria-pressed={active}
           className={cn(
-            'mt-0.5 grid h-5 min-w-5 place-items-center rounded px-1 font-mono text-[11px] font-semibold',
+            'grid h-6 min-w-6 place-items-center rounded px-1 font-mono text-[11px] font-semibold',
             cited ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-muted',
           )}
         >
@@ -51,7 +52,7 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
           href={documentFileUrl(source.document_id, source.page)}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink"
+          className="inline-flex min-h-6 shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink"
         >
           Open page <ExternalLink size={12} aria-hidden />
           <span className="sr-only">{`${source.filename}, page ${source.page}, in a new tab`}</span>

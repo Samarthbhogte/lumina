@@ -1,7 +1,7 @@
 'use client'
 
 import { ExternalLink, FileText, LoaderCircle, Trash2, TriangleAlert, Upload, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 
 import { documentFileUrl, type DocumentInfo, type Health } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -30,6 +30,8 @@ export function DocumentSidebar(props: Props) {
   const [dragging, setDragging] = useState(false)
   const [confirming, setConfirming] = useState<string | null>(null)
   const input = useRef<HTMLInputElement>(null)
+  const deleteButtons = useRef(new Map<string, HTMLButtonElement>())
+  const idPrefix = useId() // the sidebar renders twice (desktop + drawer), so ids must differ
   const aiOff = health !== null && !health.openai_configured
 
   const take = (list: FileList | null) => {
@@ -103,17 +105,26 @@ export function DocumentSidebar(props: Props) {
       </div>
 
       <div className="mt-5 flex items-baseline justify-between px-5">
-        <h2 className="text-xs font-medium tracking-wide text-faint uppercase">Documents</h2>
+        <h2
+          id={`${idPrefix}-heading`}
+          tabIndex={-1}
+          className="text-xs font-medium tracking-wide text-faint uppercase outline-none"
+        >
+          Documents
+        </h2>
         {selected.size > 0 && (
-          <button type="button" onClick={onClearSelection} className="text-xs text-accent hover:underline">
+          <button type="button" onClick={onClearSelection} className="-my-1 rounded px-2 py-1 text-xs text-accent hover:underline">
             Search all
           </button>
         )}
       </div>
 
       <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <p className="sr-only" role="status">
+          {uploading.length ? `Indexing ${uploading.length} file${uploading.length === 1 ? '' : 's'}` : ''}
+        </p>
         {uploading.map((name) => (
-          <div key={name} className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-muted" role="status">
+          <div key={name} className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-muted">
             <LoaderCircle size={15} className="shrink-0 animate-spin text-accent" aria-hidden />
             <span className="truncate">{name}</span>
             <span className="ml-auto shrink-0 text-xs">Indexing</span>
@@ -126,12 +137,12 @@ export function DocumentSidebar(props: Props) {
               <TriangleAlert size={14} aria-hidden /> Couldn’t load documents
             </p>
             <p className="mt-1 text-xs">{loadError}</p>
-            <button type="button" onClick={props.onRetryLoad} className="mt-2 text-xs font-medium underline">
+            <button type="button" onClick={props.onRetryLoad} className="-mx-2 mt-1 rounded px-2 py-1 text-xs font-medium underline">
               Try again
             </button>
           </div>
         ) : documents === null ? (
-          <div className="space-y-2 px-2 pt-1" aria-label="Loading documents">
+          <div className="space-y-2 px-2 pt-1" role="status" aria-label="Loading documents">
             {[0, 1, 2].map((i) => (
               <div key={i} className="h-9 animate-pulse rounded-md bg-surface-2" />
             ))}
@@ -151,13 +162,15 @@ export function DocumentSidebar(props: Props) {
                 )}
               >
                 {confirming === doc.id ? (
-                  <div className="flex w-full items-center gap-2 py-0.5 text-sm">
+                  <div role="group" aria-label="Confirm delete" className="flex w-full items-center gap-2 py-0.5 text-sm">
                     <span className="min-w-0 flex-1 truncate">Delete “{doc.filename}”?</span>
                     <button
                       type="button"
                       onClick={() => {
                         setConfirming(null)
                         props.onDelete(doc)
+                        // The row is about to disappear; keep keyboard focus in the list.
+                        document.getElementById(`${idPrefix}-heading`)?.focus()
                       }}
                       className="rounded bg-bad px-2 py-1 text-xs font-medium text-paper"
                     >
@@ -165,7 +178,17 @@ export function DocumentSidebar(props: Props) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setConfirming(null)}
+                      autoFocus
+                      onClick={() => {
+                        setConfirming(null)
+                        requestAnimationFrame(() => deleteButtons.current.get(doc.id)?.focus())
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setConfirming(null)
+                          requestAnimationFrame(() => deleteButtons.current.get(doc.id)?.focus())
+                        }
+                      }}
                       className="rounded px-2 py-1 text-xs text-muted hover:text-ink"
                     >
                       Cancel
@@ -175,13 +198,13 @@ export function DocumentSidebar(props: Props) {
                   <>
                     <input
                       type="checkbox"
-                      id={`doc-${doc.id}`}
+                      id={`${idPrefix}-${doc.id}`}
                       checked={selected.has(doc.id)}
                       onChange={() => onToggle(doc.id)}
-                      className="h-3.5 w-3.5 shrink-0 accent-[var(--accent)]"
+                      className="h-4 w-4 shrink-0 accent-[var(--accent)]"
                       aria-label={`Only search ${doc.filename}`}
                     />
-                    <label htmlFor={`doc-${doc.id}`} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                    <label htmlFor={`${idPrefix}-${doc.id}`} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                       <FileText size={15} className="shrink-0 text-faint" aria-hidden />
                       <span className="min-w-0">
                         <span className="block truncate text-sm" title={doc.filename}>
@@ -192,7 +215,7 @@ export function DocumentSidebar(props: Props) {
                         </span>
                       </span>
                     </label>
-                    <div className="flex shrink-0 opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+                    <div className="flex shrink-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
                       <a
                         href={documentFileUrl(doc.id)}
                         target="_blank"
@@ -204,6 +227,10 @@ export function DocumentSidebar(props: Props) {
                       </a>
                       <button
                         type="button"
+                        ref={(el) => {
+                          if (el) deleteButtons.current.set(doc.id, el)
+                          else deleteButtons.current.delete(doc.id)
+                        }}
                         onClick={() => setConfirming(doc.id)}
                         aria-label={`Delete ${doc.filename}`}
                         className="grid h-7 w-7 place-items-center rounded text-muted hover:bg-surface hover:text-bad"

@@ -16,7 +16,9 @@ export function SourcesPanel({ message, activeSource, onSelect }: Props) {
   const refs = useRef(new Map<number, HTMLLIElement>())
 
   useEffect(() => {
-    if (activeSource !== null) refs.current.get(activeSource)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (activeSource === null) return
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    refs.current.get(activeSource)?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
   }, [activeSource, message?.id])
 
   const cited = new Set(message?.result?.cited ?? [])

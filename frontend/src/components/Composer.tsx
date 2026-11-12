@@ -39,7 +39,7 @@ export function Composer({ busy, disabled, disabledReason, scopeLabel, onSend, o
         e.preventDefault()
         submit()
       }}
-      className="rounded-2xl border border-line bg-surface shadow-sm focus-within:border-ring"
+      className="rounded-2xl border border-field bg-surface shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40"
     >
       <label htmlFor="question" className="sr-only">
         Ask a question about your documents
