@@ -1,0 +1,13 @@
+# Direct dependencies. Pinned versions live in requirements.txt (uv pip compile).
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+openai
+langchain-core
+langchain-openai
+langchain-community
+langchain-text-splitters
+faiss-cpu
+pymupdf

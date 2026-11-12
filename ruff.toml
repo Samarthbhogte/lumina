@@ -1,0 +1,8 @@
+line-length = 120
+target-version = "py312"
+extend-exclude = ["notebooks", "backend/scripts/finetune"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# B008: FastAPI's Depends()/File() defaults are the framework's documented pattern.
+ignore = ["B008"]
