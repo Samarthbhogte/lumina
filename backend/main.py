@@ -3,7 +3,6 @@
 import logging
 from contextlib import asynccontextmanager
 
-import openai
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,6 +11,7 @@ from langchain_core.language_models import BaseChatModel
 
 from backend.api import router
 from backend.config import Settings, get_settings
+from backend.providers import PROVIDER_ERRORS, build_models, classify
 from backend.rag import RagService
 from backend.store import DocumentStore
 
@@ -23,10 +23,10 @@ class _MissingKeyEmbeddings(Embeddings):
     """Stand-in that lets the app start (and list documents) before a key is configured."""
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise RuntimeError("OPENAI_API_KEY is not set.")
+        raise RuntimeError("No AI provider API key is set.")
 
     def embed_query(self, text: str) -> list[float]:
-        raise RuntimeError("OPENAI_API_KEY is not set.")
+        raise RuntimeError("No AI provider API key is set.")
 
 
 class _Guard:
@@ -90,32 +90,25 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         emb, chat = embeddings, llm
-        if emb is None and settings.openai_api_key:
-            from langchain_openai import OpenAIEmbeddings
-
-            emb = OpenAIEmbeddings(model=settings.embedding_model, api_key=settings.openai_api_key)
-        if chat is None and settings.openai_api_key:
-            from langchain_openai import ChatOpenAI
-
-            chat = ChatOpenAI(
-                model=settings.chat_model,
-                temperature=settings.temperature,
-                api_key=settings.openai_api_key,
-                max_retries=2,
-                timeout=60,
-            )
+        if emb is None and chat is None:
+            emb, chat = build_models(settings)
         app.state.settings = settings
         app.state.ai_ready = emb is not None and chat is not None
         app.state.store = DocumentStore(
             settings.data_dir,
             emb or _MissingKeyEmbeddings(),
+            embedding_id=settings.embedding_id,
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
             max_chunks=settings.max_chunks_per_document,
         )
         app.state.rag = RagService(app.state.store, chat, settings) if chat else None
         if not app.state.ai_ready:
-            logger.warning("OPENAI_API_KEY is not set: uploads and questions are disabled.")
+            logger.warning("%s is not set: uploads and questions are disabled.", settings.api_key_name)
+        else:
+            logger.info(
+                "Provider %s: chat=%s embeddings=%s", settings.provider, settings.chat_model, settings.embedding_model
+            )
         yield
 
     app = FastAPI(
@@ -134,23 +127,24 @@ def create_app(
         allow_headers=["Content-Type"],
     )
 
-    @app.exception_handler(openai.AuthenticationError)
-    async def _openai_auth(_: Request, exc: openai.AuthenticationError):
-        logger.error("OpenAI rejected the API key: %s", exc)
-        return JSONResponse(status_code=502, content={"detail": "OpenAI rejected the API key."})
+    async def _provider_errors(_: Request, exc: Exception):
+        kind = classify(exc)
+        label = settings.provider_label
+        if kind == "auth":
+            logger.error("%s rejected the API key: %s", label, exc)
+            return JSONResponse(status_code=502, content={"detail": f"{label} rejected the API key."})
+        if kind == "rate":
+            logger.error("%s rate limit or quota: %s", label, exc)
+            return JSONResponse(
+                status_code=503, content={"detail": f"{label} rate limit or quota reached. Try again shortly."}
+            )
+        logger.exception("Unhandled error" if kind is None else f"{label} request failed")
+        detail = "Internal server error." if kind is None else f"The {label} request failed."
+        return JSONResponse(status_code=500 if kind is None else 502, content={"detail": detail})
 
-    @app.exception_handler(openai.RateLimitError)
-    async def _openai_rate(_: Request, exc: openai.RateLimitError):
-        logger.error("OpenAI rate limit or quota: %s", exc)
-        return JSONResponse(
-            status_code=503,
-            content={"detail": "OpenAI rate limit or quota reached. Try again shortly."},
-        )
-
-    @app.exception_handler(openai.APIError)
-    async def _openai_other(_: Request, exc: openai.APIError):
-        logger.error("OpenAI request failed: %s", exc)
-        return JSONResponse(status_code=502, content={"detail": "The AI provider request failed."})
+    # Registered per provider base class (not bare Exception, which Starlette re-raises).
+    for error_type in PROVIDER_ERRORS:
+        app.add_exception_handler(error_type, _provider_errors)
 
     app.include_router(router)
     # Outermost, so the size cap and headers also apply to CORS and error responses.

@@ -12,7 +12,7 @@ from backend.tests.conftest import make_pdf, upload
 def test_health_reports_configuration(client):
     body = client.get("/api/health").json()
     assert body["status"] == "ok"
-    assert body["openai_configured"] is True
+    assert body["ai_configured"] is True and body["provider"] == "OpenAI"
     assert body["documents"] == 0
 
 
@@ -157,7 +157,7 @@ def test_index_persists_across_restarts(settings, fake_llm, gdpr_pdf):
 
 def test_without_api_key_ai_routes_return_503(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path, openai_api_key=None))) as c:
-        assert c.get("/api/health").json()["openai_configured"] is False
+        assert c.get("/api/health").json()["ai_configured"] is False
         assert c.get("/api/documents").status_code == 200
         assert c.post("/api/ask", json={"question": "Is this ok?"}).status_code == 503
         assert upload(c, "a.pdf", make_pdf("hi")).status_code == 503

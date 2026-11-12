@@ -97,7 +97,7 @@ export default function Workspace() {
   const frame = useRef<number | null>(null)
 
   const busy = messages.some((m) => m.role === 'assistant' && m.status === 'streaming')
-  const aiOff = health !== null && !health.openai_configured
+  const aiOff = health !== null && !health.ai_configured
   const hasDocs = (documents?.length ?? 0) > 0
 
   useEffect(() => {
@@ -382,7 +382,7 @@ export default function Workspace() {
                 </p>
                 {aiOff ? (
                   <p className="mt-6 rounded-lg bg-bad-soft p-3 text-sm text-bad">
-                    The server has no OpenAI API key. Add <code className="font-mono">OPENAI_API_KEY</code> to{' '}
+                    The server has no {health?.provider} API key. Add it to{' '}
                     <code className="font-mono">backend/.env</code> and restart the API.
                   </p>
                 ) : loadError ? (
@@ -450,7 +450,7 @@ export default function Workspace() {
             <Composer
               busy={busy}
               disabled={aiOff || !hasDocs}
-              disabledReason={aiOff ? 'The server needs an OpenAI API key' : 'Add a PDF to start asking questions'}
+              disabledReason={aiOff ? `The server needs a ${health?.provider ?? 'provider'} API key` : 'Add a PDF to start asking questions'}
               scopeLabel={scopeLabel}
               onSend={(q) => void ask(q)}
               onStop={() => abortRef.current?.abort()}

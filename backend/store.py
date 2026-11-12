@@ -82,6 +82,7 @@ class DocumentStore:
         self,
         data_dir: Path,
         embeddings: Embeddings,
+        embedding_id: str = "default",
         chunk_size: int = 1000,
         chunk_overlap: int = 150,
         max_chunks: int = 4000,
@@ -94,45 +95,51 @@ class DocumentStore:
         os.chmod(self.data_dir, 0o700)
 
         self._embeddings = embeddings
+        self.embedding_id = embedding_id
         self._splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         self._max_chunks = max_chunks
         self._lock = threading.RLock()
-        self._docs, index_sha = self._load_manifest()
-        self._index: FAISS | None = self._load_index(index_sha)
+        self._docs, index_sha, built_with = self._load_manifest()
+        self._index: FAISS | None = self._load_index(index_sha, built_with)
 
     # ---------- persistence ----------
 
-    def _load_manifest(self) -> tuple[dict[str, DocumentRecord], str | None]:
+    def _load_manifest(self) -> tuple[dict[str, DocumentRecord], str | None, str | None]:
         if not self.manifest_path.exists():
-            return {}, None
+            return {}, None, None
         try:
             raw = json.loads(self.manifest_path.read_text())
             docs = {d["id"]: DocumentRecord(**d) for d in raw.get("documents", [])}
-            return docs, raw.get("index_sha256")
+            return docs, raw.get("index_sha256"), raw.get("embedding_id")
         except (ValueError, TypeError, KeyError) as exc:
             backup = self.manifest_path.with_suffix(f".corrupt-{int(datetime.now().timestamp())}.json")
             os.replace(self.manifest_path, backup)
             logger.error("Manifest unreadable (%s); moved to %s and starting empty", exc, backup.name)
-            return {}, None
+            return {}, None, None
 
     def _save_manifest(self) -> None:
         pkl = self.index_dir / "index.pkl"
         payload = {
             "version": MANIFEST_VERSION,
             "index_sha256": _sha256_file(pkl) if pkl.exists() else None,
+            "embedding_id": self.embedding_id,
             "documents": [asdict(d) for d in self._docs.values()],
         }
         tmp = self.manifest_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2))
         os.replace(tmp, self.manifest_path)
 
-    def _load_index(self, expected_sha: str | None) -> FAISS | None:
+    def _load_index(self, expected_sha: str | None, built_with: str | None) -> FAISS | None:
         old = self.index_dir.with_name("index.old")
         if not self.index_dir.exists() and old.exists():
             old.rename(self.index_dir)  # crash between the two renames in _save_index
         pkl = self.index_dir / "index.pkl"
         if not self._docs:
             return None
+        if built_with and built_with != self.embedding_id:
+            # Vectors from another model live in a different space (often a different size).
+            logger.warning("Embedding model changed (%s -> %s); re-indexing stored PDFs", built_with, self.embedding_id)
+            return self._rebuild()
         if pkl.exists() and expected_sha and _sha256_file(pkl) == expected_sha:
             try:
                 # The pickle is written only by this class, and its checksum (above) must

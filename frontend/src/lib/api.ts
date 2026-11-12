@@ -38,7 +38,8 @@ export interface UploadResult {
 
 export interface Health {
   status: 'ok'
-  openai_configured: boolean
+  ai_configured: boolean
+  provider: string
   chat_model: string
   documents: number
   chunks: number

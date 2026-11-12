@@ -2,11 +2,33 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+Provider = Literal["openai", "gemini"]
+
+# Per-provider defaults. Confidence thresholds are cosine-similarity cut-offs for the cited
+# passages; each embedding model spreads scores differently, so they are tuned per model.
+DEFAULTS: dict[str, dict] = {
+    "openai": {
+        "label": "OpenAI",
+        "chat_model": "gpt-4o-mini",
+        "embedding_model": "text-embedding-3-small",
+        "confidence_high": 0.55,
+        "confidence_medium": 0.40,
+    },
+    "gemini": {
+        "label": "Gemini",
+        "chat_model": "gemini-flash-latest",
+        "embedding_model": "gemini-embedding-001",
+        "confidence_high": 0.72,
+        "confidence_medium": 0.62,
+    },
+}
 
 
 class Settings(BaseSettings):
@@ -17,10 +39,16 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    # Which AI provider answers questions and embeds documents.
+    provider: Provider = "openai"
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    google_api_key: str | None = Field(default=None, validation_alias=AliasChoices("GOOGLE_API_KEY", "GEMINI_API_KEY"))
 
-    chat_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
+    # Left empty, these take the provider's defaults above.
+    chat_model: str = ""
+    embedding_model: str = ""
+    confidence_high: float = 0.0
+    confidence_medium: float = 0.0
     temperature: float = 0.1
 
     data_dir: Path = ROOT_DIR / "data"
@@ -47,6 +75,32 @@ class Settings(BaseSettings):
         if "*" in v:
             raise ValueError("LUMINA_CORS_ORIGINS must list explicit origins, not '*'.")
         return v
+
+    @model_validator(mode="after")
+    def _apply_provider_defaults(self) -> "Settings":
+        d = DEFAULTS[self.provider]
+        self.chat_model = self.chat_model or d["chat_model"]
+        self.embedding_model = self.embedding_model or d["embedding_model"]
+        self.confidence_high = self.confidence_high or d["confidence_high"]
+        self.confidence_medium = self.confidence_medium or d["confidence_medium"]
+        return self
+
+    @property
+    def provider_label(self) -> str:
+        return DEFAULTS[self.provider]["label"]
+
+    @property
+    def api_key(self) -> str | None:
+        return self.openai_api_key if self.provider == "openai" else self.google_api_key
+
+    @property
+    def api_key_name(self) -> str:
+        return "OPENAI_API_KEY" if self.provider == "openai" else "GOOGLE_API_KEY"
+
+    @property
+    def embedding_id(self) -> str:
+        """Identifies the vector space; the index is rebuilt when this changes."""
+        return f"{self.provider}:{self.embedding_model}"
 
     @property
     def cors_origin_list(self) -> list[str]:

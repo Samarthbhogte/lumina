@@ -102,19 +102,21 @@ def cited_numbers(answer: str, sources: list[Source]) -> list[int]:
     return seen
 
 
-def assess(answer: str, sources: list[Source], cited: list[int]) -> tuple[bool, Confidence]:
+def assess(
+    answer: str, sources: list[Source], cited: list[int], high: float = 0.55, medium: float = 0.40
+) -> tuple[bool, Confidence]:
     """Whether the documents answered the question, and how strongly the cited text matches.
 
     Confidence comes from retrieval similarity of the cited chunks, not from the model's
-    opinion of itself. Thresholds suit OpenAI text-embedding-3 cosine scores.
+    opinion of itself. Thresholds are per embedding model (see config.DEFAULTS).
     """
     found = _normalise(NOT_FOUND) not in _normalise(answer)
     if not found or not cited:
         return found, "low"
     best = max(s.score for s in sources if s.n in cited)
-    if best >= 0.55:
+    if best >= high:
         return found, "high"
-    if best >= 0.40:
+    if best >= medium:
         return found, "medium"
     return found, "low"
 
@@ -158,7 +160,9 @@ class RagService:
 
     def finish(self, prepared: Prepared, answer: str) -> AskResponse:
         cited = cited_numbers(answer, prepared.sources)
-        found, confidence = assess(answer, prepared.sources, cited)
+        found, confidence = assess(
+            answer, prepared.sources, cited, self.settings.confidence_high, self.settings.confidence_medium
+        )
         if prepared.fixed_answer is not None:
             found = False
         return AskResponse(

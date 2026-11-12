@@ -25,12 +25,13 @@ relevant passages, answers from them only, and links every claim to its source.
 ```
 Next.js 16 UI ──SSE──▶ FastAPI ──▶ DocumentStore (FAISS + manifest + original PDFs)
                          │                     ▲
-                         └──▶ RAG: retrieve top-k page chunks ──▶ OpenAI chat model
+                         └──▶ RAG: retrieve top-k page chunks ──▶ Gemini or OpenAI chat model
 ```
 
 1. **Ingest.** PyMuPDF extracts text page by page. Each page is split into about 1,000-character
-   chunks tagged with `document_id`, `filename` and `page`. The chunks are embedded with
-   `text-embedding-3-small` and stored in one shared FAISS index.
+   chunks tagged with `document_id`, `filename` and `page`. The chunks are embedded
+   (`gemini-embedding-001` or `text-embedding-3-small`) and stored in one shared FAISS index.
+   If you switch provider, existing documents are re-embedded from the stored PDFs on startup.
 2. **Ask.** The question (condensed with chat history if needed) retrieves the top 6
    chunks. These go to the model as numbered `<source>` blocks with instructions to cite
    them and to refuse when they don't contain the answer.
@@ -40,11 +41,12 @@ Next.js 16 UI ──SSE──▶ FastAPI ──▶ DocumentStore (FAISS + manife
 
 ## Quick start
 
-Requirements: Python 3.12, Node 22, and an OpenAI API key.
+Requirements: Python 3.12, Node 22, and an API key for **Gemini** (free tier: get one at
+https://aistudio.google.com/apikey) or **OpenAI**.
 
 ```bash
 # 1. Backend
-cp backend/.env.example backend/.env        # then put your OPENAI_API_KEY in it
+cp backend/.env.example backend/.env        # set LUMINA_PROVIDER and that provider's key
 python3.12 -m venv backend/.venv
 backend/.venv/bin/pip install -r backend/requirements-dev.txt
 backend/.venv/bin/uvicorn backend.main:app --reload --port 8000
@@ -68,7 +70,7 @@ named volume.
 ## Tests and evals
 
 ```bash
-backend/.venv/bin/python -m pytest -q                 # 56 offline tests, fake models, no cost
+backend/.venv/bin/python -m pytest -q                 # 68 offline tests, fake models, no cost
 backend/.venv/bin/ruff check backend
 cd frontend && npm run lint && npm run typecheck && npm run build
 npx promptfoo@latest eval -c promptfoo-tests/promptfooconfig.yaml   # live evals, see promptfoo-tests/
@@ -82,9 +84,11 @@ Set these in `backend/.env` or the environment.
 
 | Variable | Default | |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | (none) | Required for uploads and questions |
-| `LUMINA_CHAT_MODEL` | `gpt-4o-mini` | Any OpenAI chat model |
-| `LUMINA_EMBEDDING_MODEL` | `text-embedding-3-small` | Changing it needs a re-index |
+| `LUMINA_PROVIDER` | `openai` | `gemini` or `openai` |
+| `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | (none) | Needed when the provider is `gemini` |
+| `OPENAI_API_KEY` | (none) | Needed when the provider is `openai` |
+| `LUMINA_CHAT_MODEL` | per provider | `gemini-flash-latest` / `gpt-4o-mini` |
+| `LUMINA_EMBEDDING_MODEL` | per provider | `gemini-embedding-001` / `text-embedding-3-small`. Changing it re-indexes on startup |
 | `LUMINA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated, no `*` |
 | `LUMINA_DATA_DIR` | `./data` | Index, manifest and stored PDFs |
 | `LUMINA_MAX_UPLOAD_MB` / `LUMINA_MAX_FILES_PER_UPLOAD` | `25` / `10` | |
@@ -108,18 +112,21 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
 ## Limits and next steps
 
 - **No authentication.** Run it on your machine or a trusted network. Anyone who can reach
-  the API can upload, delete, and spend your OpenAI budget. Accounts and per-user
+  the API can upload, delete, and use up your provider quota. Accounts and per-user
   workspaces are the natural next step.
 - **One process owns `data/`.** Run a single uvicorn worker, and add files through the API
   (the ingest script does).
 - **Scanned PDFs** without a text layer are rejected. OCR isn't included.
+- **Gemini free tier:** Google may use free-tier prompts and content to improve its
+  products. Don't upload confidential policies on the free tier. Use a paid key or OpenAI
+  for those. Free-tier rate limits also apply.
 - Confidence comes from retrieval similarity, not from verifying the answer. Check the
   cited page for anything that matters.
 
 ## Layout
 
 ```
-backend/    FastAPI app: main.py (app factory), api.py (routes), store.py, rag.py, pdf.py, guard.py
+backend/    FastAPI app: main.py (app factory), api.py (routes), store.py, rag.py, providers.py, pdf.py, guard.py
   tests/    pytest suite      scripts/  ingest_folder.py, finetune/ (earlier experiments)
 frontend/   Next.js app: src/components/Workspace.tsx is the main screen
 samples/    five simulated policy PDFs for trying it out

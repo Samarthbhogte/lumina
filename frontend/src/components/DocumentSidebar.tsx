@@ -32,7 +32,7 @@ export function DocumentSidebar(props: Props) {
   const input = useRef<HTMLInputElement>(null)
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>())
   const idPrefix = useId() // the sidebar renders twice (desktop + drawer), so ids must differ
-  const aiOff = health !== null && !health.openai_configured
+  const aiOff = health !== null && !health.ai_configured
 
   const take = (list: FileList | null) => {
     const files = Array.from(list ?? [])
@@ -254,15 +254,15 @@ export function DocumentSidebar(props: Props) {
               aria-hidden
               className={cn(
                 'h-1.5 w-1.5 shrink-0 rounded-full',
-                health === null ? 'bg-faint' : health.openai_configured ? 'bg-good' : 'bg-bad',
+                health === null ? 'bg-faint' : health.ai_configured ? 'bg-good' : 'bg-bad',
               )}
             />
             <span className="truncate">
               {health === null
                 ? 'Connecting…'
-                : health.openai_configured
+                : health.ai_configured
                   ? health.chat_model
-                  : 'OpenAI key missing'}
+                  : `${health.provider} key missing`}
             </span>
           </p>
           <ThemeToggle />

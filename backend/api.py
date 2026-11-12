@@ -5,7 +5,6 @@ import logging
 from contextlib import aclosing
 from pathlib import Path
 
-import openai
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -14,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.config import Settings
 from backend.guard import looks_like_injection
 from backend.pdf import PDFError, extract_pages
+from backend.providers import classify
 from backend.rag import RagService
 from backend.schemas import (
     AskRequest,
@@ -41,9 +41,10 @@ def get_store(request: Request) -> DocumentStore:
 
 def require_ai(request: Request) -> None:
     if not request.app.state.ai_ready:
+        settings: Settings = request.app.state.settings
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY is not set on the server. Add it to .env and restart.",
+            detail=f"{settings.api_key_name} is not set on the server. Add it to backend/.env and restart.",
         )
 
 
@@ -71,7 +72,8 @@ def health(request: Request, store: DocumentStore = Depends(get_store)) -> Healt
     settings: Settings = request.app.state.settings
     return Health(
         status="ok",
-        openai_configured=request.app.state.ai_ready,
+        ai_configured=request.app.state.ai_ready,
+        provider=settings.provider_label,
         chat_model=settings.chat_model,
         documents=len(store.list_documents()),
         chunks=store.chunk_count,
@@ -116,15 +118,15 @@ async def upload_documents(
         except (PDFError, DocumentTooLarge) as exc:
             results.append(UploadResult(filename=name, status="failed", error=str(exc)))
             continue
-        except (openai.AuthenticationError, openai.RateLimitError):
-            raise  # mapped to a clear 502/503 by the handlers in main.py
-        except Exception:
+        except Exception as exc:
+            if classify(exc) in ("auth", "rate"):
+                raise  # a bad key or quota affects every file: return one clear 502/503 (main.py)
             logger.exception("Indexing %s failed", name)
             results.append(
                 UploadResult(
                     filename=name,
                     status="failed",
-                    error="Indexing failed. Check the server log and your OpenAI key.",
+                    error="Indexing failed. Check the server log and your API key.",
                 )
             )
             continue
@@ -176,7 +178,7 @@ async def ask(req: AskRequest, rag: RagService = Depends(get_rag)) -> AskRespons
 
 
 @router.post("/ask/stream")
-async def ask_stream(req: AskRequest, rag: RagService = Depends(get_rag)) -> StreamingResponse:
+async def ask_stream(req: AskRequest, request: Request, rag: RagService = Depends(get_rag)) -> StreamingResponse:
     """Server-sent events: `sources`, then `token` events, then `done` (or `error`)."""
     prepared = await rag.prepare(req, flagged=_check_question(req))
 
@@ -191,17 +193,15 @@ async def ask_stream(req: AskRequest, rag: RagService = Depends(get_rag)) -> Str
                     parts.append(token)
                     yield _sse("token", {"text": token})
             done = rag.finish(prepared, "".join(parts).strip())
-        except openai.AuthenticationError:
-            logger.exception("OpenAI rejected the API key mid-stream")
-            yield _sse("error", {"message": "OpenAI rejected the API key."})
-            return
-        except openai.RateLimitError:
-            logger.exception("OpenAI rate limit mid-stream")
-            yield _sse("error", {"message": "OpenAI rate limit or quota reached. Try again shortly."})
-            return
-        except Exception:
+        except Exception as exc:
+            kind = classify(exc)
+            label = request.app.state.settings.provider_label
             logger.exception("Streaming answer failed")
-            yield _sse("error", {"message": "The AI model request failed. Please try again."})
+            message = {
+                "auth": f"{label} rejected the API key.",
+                "rate": f"{label} rate limit or quota reached. Try again shortly.",
+            }.get(kind or "", "The AI model request failed. Please try again.")
+            yield _sse("error", {"message": message})
             return
         yield _sse("done", done.model_dump())
 

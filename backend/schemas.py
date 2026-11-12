@@ -67,7 +67,8 @@ class UploadResponse(BaseModel):
 
 class Health(BaseModel):
     status: Literal["ok"]
-    openai_configured: bool
+    ai_configured: bool
+    provider: str
     chat_model: str
     documents: int
     chunks: int
