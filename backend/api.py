@@ -2,8 +2,10 @@
 
 import json
 import logging
+from contextlib import aclosing
 from pathlib import Path
 
+import openai
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -21,7 +23,7 @@ from backend.schemas import (
     UploadResponse,
     UploadResult,
 )
-from backend.store import DocumentRecord, DocumentStore
+from backend.store import DocumentRecord, DocumentStore, DocumentTooLarge
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -92,6 +94,8 @@ async def upload_documents(
 ) -> UploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded.")
+    if len(files) > settings.max_files_per_upload:
+        raise HTTPException(status_code=400, detail=f"Upload at most {settings.max_files_per_upload} files at a time.")
 
     results: list[UploadResult] = []
     for upload in files:
@@ -109,9 +113,11 @@ async def upload_documents(
         try:
             pages = await run_in_threadpool(extract_pages, data, settings.max_pages)
             record, created = await run_in_threadpool(store.add, name, data, pages)
-        except PDFError as exc:
+        except (PDFError, DocumentTooLarge) as exc:
             results.append(UploadResult(filename=name, status="failed", error=str(exc)))
             continue
+        except (openai.AuthenticationError, openai.RateLimitError):
+            raise  # mapped to a clear 502/503 by the handlers in main.py
         except Exception:
             logger.exception("Indexing %s failed", name)
             results.append(
@@ -150,6 +156,7 @@ def document_file(document_id: str = DocumentId, store: DocumentStore = Depends(
         media_type="application/pdf",
         filename=record.filename,
         content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 
@@ -177,14 +184,26 @@ async def ask_stream(req: AskRequest, rag: RagService = Depends(get_rag)) -> Str
         yield _sse("sources", [s.model_dump() for s in prepared.sources])
         parts: list[str] = []
         try:
-            async for token in rag.stream(prepared):
-                parts.append(token)
-                yield _sse("token", {"text": token})
+            # aclosing() closes the upstream model stream as soon as the client disconnects,
+            # instead of leaving it to the garbage collector (and billing tokens meanwhile).
+            async with aclosing(rag.stream(prepared)) as tokens:
+                async for token in tokens:
+                    parts.append(token)
+                    yield _sse("token", {"text": token})
+            done = rag.finish(prepared, "".join(parts).strip())
+        except openai.AuthenticationError:
+            logger.exception("OpenAI rejected the API key mid-stream")
+            yield _sse("error", {"message": "OpenAI rejected the API key."})
+            return
+        except openai.RateLimitError:
+            logger.exception("OpenAI rate limit mid-stream")
+            yield _sse("error", {"message": "OpenAI rate limit or quota reached. Try again shortly."})
+            return
         except Exception:
             logger.exception("Streaming answer failed")
             yield _sse("error", {"message": "The AI model request failed. Please try again."})
             return
-        yield _sse("done", rag.finish(prepared, "".join(parts).strip()).model_dump())
+        yield _sse("done", done.model_dump())
 
     return StreamingResponse(
         events(),

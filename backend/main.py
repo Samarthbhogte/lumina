@@ -1,7 +1,6 @@
 """Lumina API. Run from the repository root: uvicorn backend.main:app --reload"""
 
 import logging
-import time
 from contextlib import asynccontextmanager
 
 import openai
@@ -28,6 +27,56 @@ class _MissingKeyEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         raise RuntimeError("OPENAI_API_KEY is not set.")
+
+
+class _Guard:
+    """Pure ASGI middleware: security headers on every response, and a hard cap on request
+    bodies so an oversized multipart upload is refused before it is spooled to disk."""
+
+    HEADERS = [
+        (b"x-content-type-options", b"nosniff"),
+        (b"referrer-policy", b"no-referrer"),
+        (b"x-frame-options", b"DENY"),
+    ]
+
+    def __init__(self, app, max_body: int):
+        self.app = app
+        self.max_body = max_body
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        length = dict(scope["headers"]).get(b"content-length")
+        if length is not None and int(length) > self.max_body:
+            response = JSONResponse({"detail": "Upload is too large."}, status_code=413)
+            return await response(scope, receive, send)
+
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_body:
+                    raise _TooLarge
+            return message
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers", [])) + self.HEADERS
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, send_with_headers)
+        except _TooLarge:
+            response = JSONResponse({"detail": "Upload is too large."}, status_code=413)
+            await response(scope, receive, send)
+
+
+class _TooLarge(Exception):
+    pass
 
 
 def create_app(
@@ -62,6 +111,7 @@ def create_app(
             emb or _MissingKeyEmbeddings(),
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
+            max_chunks=settings.max_chunks_per_document,
         )
         app.state.rag = RagService(app.state.store, chat, settings) if chat else None
         if not app.state.ai_ready:
@@ -73,6 +123,9 @@ def create_app(
         description="Upload policy PDFs and ask compliance questions with page-level citations.",
         version="2.0.0",
         lifespan=lifespan,
+        docs_url="/docs" if settings.enable_docs else None,
+        redoc_url=None,
+        openapi_url="/openapi.json" if settings.enable_docs else None,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -80,19 +133,6 @@ def create_app(
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
-
-    @app.middleware("http")
-    async def timing(request: Request, call_next):
-        start = time.perf_counter()
-        response = await call_next(request)
-        logger.info(
-            "%s %s -> %d in %.0f ms",
-            request.method,
-            request.url.path,
-            response.status_code,
-            (time.perf_counter() - start) * 1000,
-        )
-        return response
 
     @app.exception_handler(openai.AuthenticationError)
     async def _openai_auth(_: Request, exc: openai.AuthenticationError):
@@ -113,6 +153,8 @@ def create_app(
         return JSONResponse(status_code=502, content={"detail": "The AI provider request failed."})
 
     app.include_router(router)
+    # Outermost, so the size cap and headers also apply to CORS and error responses.
+    app.add_middleware(_Guard, max_body=settings.max_request_bytes)
 
     @app.get("/", include_in_schema=False)
     def root():

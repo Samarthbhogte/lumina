@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from starlette.concurrency import run_in_threadpool
 
 from backend.config import Settings
+from backend.guard import looks_like_injection
 from backend.schemas import AskRequest, AskResponse, ChatMessage, Confidence, Source
 from backend.store import DocumentStore, SearchHit
 
@@ -42,7 +43,8 @@ plain English and Markdown."""
 CONDENSE_PROMPT = """Rewrite the user's latest message as a standalone search query for the \
 documents, using the conversation for missing context. Reply with the query only."""
 
-_CITATION = re.compile(r"\[(\d{1,2})\]")
+# Matches [1], [1, 3] and [1,3]; [1][3] is two matches.
+_CITATION = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
 
 
 @dataclass
@@ -54,7 +56,9 @@ class Prepared:
 
 
 def _history_messages(history: list[ChatMessage], limit: int) -> list[BaseMessage]:
-    recent = history[-limit:] if limit else []
+    # History comes from the client, so screen it like the question: drop any turn that
+    # looks like an injection rather than letting it into the prompt.
+    recent = [m for m in (history[-limit:] if limit else []) if not looks_like_injection(m.content)]
     return [HumanMessage(m.content[:4000]) if m.role == "user" else AIMessage(m.content[:4000]) for m in recent]
 
 
@@ -76,19 +80,25 @@ def _format_sources(hits: list[SearchHit], max_chars: int) -> tuple[list[Source]
                 score=round(hit.score, 3),
             )
         )
+        # Escape markup so document text can't close the <source> tag and pose as instructions.
         name = html.escape(hit.filename, quote=True)
-        body = hit.text.replace("</source>", "</ source>")
+        body = html.escape(hit.text, quote=False)
         blocks.append(f'<source n="{n}" file="{name}" page="{hit.page}">\n{body}\n</source>')
     return sources, "\n\n".join(blocks)
+
+
+def _normalise(text: str) -> str:
+    return text.lower().replace("\u2019", "'").replace("\u2018", "'")
 
 
 def cited_numbers(answer: str, sources: list[Source]) -> list[int]:
     valid = {s.n for s in sources}
     seen: list[int] = []
     for m in _CITATION.finditer(answer):
-        n = int(m.group(1))
-        if n in valid and n not in seen:
-            seen.append(n)
+        for part in m.group(1).split(","):
+            n = int(part)
+            if n in valid and n not in seen:
+                seen.append(n)
     return seen
 
 
@@ -98,7 +108,7 @@ def assess(answer: str, sources: list[Source], cited: list[int]) -> tuple[bool, 
     Confidence comes from retrieval similarity of the cited chunks, not from the model's
     opinion of itself. Thresholds suit OpenAI text-embedding-3 cosine scores.
     """
-    found = NOT_FOUND.lower() not in answer.lower()
+    found = _normalise(NOT_FOUND) not in _normalise(answer)
     if not found or not cited:
         return found, "low"
     best = max(s.score for s in sources if s.n in cited)
@@ -124,13 +134,13 @@ class RagService:
             HumanMessage(req.question),
         ]
         result = await self.llm.ainvoke(messages)
-        query = str(result.content).strip()
+        query = result.text.strip()
         return query or req.question
 
     async def prepare(self, req: AskRequest, flagged: bool) -> Prepared:
         if flagged:
             return Prepared(sources=[], messages=None, fixed_answer=FLAGGED, flagged=True)
-        if not self.store.list_documents():
+        if not await run_in_threadpool(self.store.list_documents):
             return Prepared(sources=[], messages=None, fixed_answer=NO_DOCUMENTS)
 
         query = await self._search_query(req)
@@ -165,7 +175,7 @@ class RagService:
         if prepared.messages is None:
             return self.finish(prepared, prepared.fixed_answer or NOT_FOUND)
         result = await self.llm.ainvoke(prepared.messages)
-        return self.finish(prepared, str(result.content).strip())
+        return self.finish(prepared, result.text.strip())
 
     async def stream(self, prepared: Prepared) -> AsyncIterator[str]:
         """Yield answer tokens for an already-prepared request."""
@@ -173,5 +183,5 @@ class RagService:
             yield prepared.fixed_answer or NOT_FOUND
             return
         async for chunk in self.llm.astream(prepared.messages):
-            if text := str(chunk.content):
+            if text := chunk.text:
                 yield text

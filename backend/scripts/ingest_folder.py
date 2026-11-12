@@ -1,49 +1,51 @@
-"""Index every PDF in a folder, e.g. the bundled samples:
+"""Upload every PDF in a folder to a running Lumina API, e.g. the bundled samples:
 
-    python -m backend.scripts.ingest_folder backend/data/testing_pdfs
+    python -m backend.scripts.ingest_folder samples
+    python -m backend.scripts.ingest_folder ~/policies --api http://localhost:8000
 
-Run from the repository root with OPENAI_API_KEY set. Already-indexed files are skipped.
+It goes through the API (rather than opening the index directly) so it is safe to run
+while the server is up. Files already in the library are reported as duplicates.
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-from langchain_openai import OpenAIEmbeddings
-
-from backend.config import get_settings
-from backend.pdf import PDFError, extract_pages
-from backend.store import DocumentStore
+import httpx
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("folder", type=Path)
+    parser.add_argument("--api", default="http://localhost:8000", help="Lumina API base URL")
     args = parser.parse_args()
 
-    settings = get_settings()
-    if not settings.openai_api_key:
-        print("OPENAI_API_KEY is not set.", file=sys.stderr)
-        return 1
-    store = DocumentStore(
-        settings.data_dir,
-        OpenAIEmbeddings(model=settings.embedding_model, api_key=settings.openai_api_key),
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
-    )
     pdfs = sorted(args.folder.glob("*.pdf"))
     if not pdfs:
-        print(f"No PDFs in {args.folder}")
+        print(f"No PDFs in {args.folder}", file=sys.stderr)
         return 1
-    for path in pdfs:
-        data = path.read_bytes()
+
+    failed = 0
+    with httpx.Client(base_url=args.api.rstrip("/"), timeout=300) as client:
         try:
-            record, created = store.add(path.name, data, extract_pages(data, settings.max_pages))
-        except PDFError as exc:
-            print(f"skip   {path.name}: {exc}")
-            continue
-        print(f"{'added' if created else 'exists'} {path.name}: {record.pages} pages, {record.chunks} chunks")
-    return 0
+            client.get("/api/health").raise_for_status()
+        except httpx.HTTPError as exc:
+            print(f"Can't reach the API at {args.api}: {exc}", file=sys.stderr)
+            return 1
+        for path in pdfs:
+            res = client.post("/api/documents", files=[("files", (path.name, path.read_bytes(), "application/pdf"))])
+            if res.status_code != 200:
+                print(f"error  {path.name}: {res.json().get('detail', res.text)}")
+                failed += 1
+                continue
+            r = res.json()["results"][0]
+            doc = r.get("document") or {}
+            if r["status"] == "failed":
+                failed += 1
+                print(f"failed {path.name}: {r['error']}")
+            else:
+                print(f"{r['status']:<9} {path.name}: {doc.get('pages')} pages, {doc.get('chunks')} chunks")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
