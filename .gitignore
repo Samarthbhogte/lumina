@@ -192,3 +192,6 @@ $RECYCLE.BIN/
 data/
 backend/.venv/
 backend/data/uploads/
+
+# Local tooling
+data-demo/
