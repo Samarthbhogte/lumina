@@ -1,36 +1,35 @@
-// app/layout.tsx
 import '../styles/globals.css'
 
-import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
-import { Toaster } from 'react-hot-toast'
+import type { Metadata, Viewport } from 'next'
+import { Geist, Geist_Mono, Source_Serif_4 } from 'next/font/google'
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-})
+import { Providers } from '@/components/Providers'
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-})
+const sans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
+const mono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] })
+const serif = Source_Serif_4({ variable: '--font-serif', subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Lumina – Compliance Assistant',
-  description: 'AI-powered legal assistant using RAG & OpenAI',
+  title: 'Lumina · Compliance assistant',
+  description: 'Ask questions about your policy documents and get answers cited to the page.',
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f7f5f0' },
+    { media: '(prefers-color-scheme: dark)', color: '#141311' },
+  ],
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>
-        {/* ✅ Global Toaster for popups */}
-        <Toaster position="top-center" />
-        {children}
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${sans.variable} ${mono.variable} ${serif.variable}`}
+    >
+      <body className="font-sans">
+        <Providers>{children}</Providers>
       </body>
     </html>
   )
