@@ -10,8 +10,8 @@ import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable
 from starlette.concurrency import run_in_threadpool
 
 from backend.config import Settings
@@ -122,7 +122,7 @@ def assess(
 
 
 class RagService:
-    def __init__(self, store: DocumentStore, llm: BaseChatModel, settings: Settings):
+    def __init__(self, store: DocumentStore, llm: Runnable, settings: Settings):
         self.store = store
         self.llm = llm
         self.settings = settings

@@ -31,8 +31,13 @@ def test_build_models_gemini_offline(tmp_path):
     s = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g-key", _env_file=None)
     emb, chat = build_models(s)
     assert isinstance(emb, UnitEmbeddings) and isinstance(emb.inner, GoogleGenerativeAIEmbeddings)
-    assert isinstance(chat, ChatGoogleGenerativeAI) and chat.model.endswith("gemini-2.5-flash")
-    assert chat.thinking_budget == 0
+    primary = chat.runnable  # wrapped with quota fallbacks
+    assert isinstance(primary, ChatGoogleGenerativeAI) and primary.model.endswith("gemini-2.5-flash")
+    assert primary.thinking_budget == 0
+    assert [f.model.removeprefix("models/") for f in chat.fallbacks] == [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+    ]
 
 
 def test_build_models_without_key(tmp_path):
@@ -100,3 +105,90 @@ def test_gemini_auth_error_maps_to_502(tmp_path):
         upload(c, "a.pdf", make_pdf("Retention is 30 days."))
         res = c.post("/api/ask", json={"question": "How long is data kept?"})
     assert res.status_code == 502 and res.json()["detail"] == "Gemini rejected the API key."
+
+
+# ---------- model fallback on quota errors ----------
+
+from langchain_core.exceptions import ModelRateLimitError  # noqa: E402
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel  # noqa: E402
+from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.runnables.fallbacks import RunnableWithFallbacks  # noqa: E402
+
+DAILY = (
+    "429 Too Many Requests. Quota exceeded for metric: generate_content_free_tier_requests, limit: 20, "
+    "model: gemini-2.5-flash. quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier. "
+    "Please retry in 5h40m41.052909615s."
+)
+
+
+class _OutOfQuota(GenericFakeChatModel):
+    def _generate(self, *args, **kwargs):
+        raise ModelRateLimitError(DAILY)
+
+    def _stream(self, *args, **kwargs):
+        raise ModelRateLimitError(DAILY)
+
+
+def _answering(text: str) -> GenericFakeChatModel:
+    import itertools
+
+    return GenericFakeChatModel(messages=(AIMessage(text) for _ in itertools.count()))
+
+
+def test_gemini_fallback_defaults(tmp_path):
+    s = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g", _env_file=None)
+    assert s.fallback_model_list == ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    _, chat = build_models(s)
+    assert isinstance(chat, RunnableWithFallbacks) and len(chat.fallbacks) == 2
+    off = Settings(data_dir=tmp_path, provider="gemini", fallback_models="none", _env_file=None)
+    assert off.fallback_model_list == []
+
+
+def test_rate_limit_message_reports_daily_reset():
+    from backend.providers import rate_limit_message
+
+    assert rate_limit_message(ModelRateLimitError(DAILY), "Gemini") == (
+        "Gemini's free daily request limit is used up. It resets in about 5 h 40 min."
+    )
+    assert rate_limit_message(ModelRateLimitError("429. Please retry in 31.2s."), "Gemini") == (
+        "Gemini rate limit reached. Try again in a minute."
+    )
+
+
+def _app_with(tmp_path, llm):
+    from fastapi.testclient import TestClient
+
+    from backend.main import create_app
+
+    settings = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g", _env_file=None)
+    return TestClient(create_app(settings, embeddings=DeterministicFakeEmbedding(size=16), llm=llm))
+
+
+def test_ask_falls_back_when_primary_is_out_of_quota(tmp_path):
+    from backend.tests.conftest import make_pdf, upload
+
+    llm = _OutOfQuota(messages=iter([])).with_fallbacks(
+        [_answering("Fallback answer [1].")], exceptions_to_handle=(ModelRateLimitError,)
+    )
+    with _app_with(tmp_path, llm) as c:
+        upload(c, "a.pdf", make_pdf("Retention is 30 days."))
+        body = c.post("/api/ask", json={"question": "How long is data kept?"}).json()
+        with c.stream("POST", "/api/ask/stream", json={"question": "How long is data kept?"}) as res:
+            raw = "".join(res.iter_text())
+    assert body["answer"] == "Fallback answer [1]." and body["cited"] == [1]
+    assert "event: done" in raw and "Fallback answer" in raw
+
+
+def test_all_models_out_of_quota_says_when_it_resets(tmp_path):
+    from backend.tests.conftest import make_pdf, upload
+
+    llm = _OutOfQuota(messages=iter([])).with_fallbacks(
+        [_OutOfQuota(messages=iter([]))], exceptions_to_handle=(ModelRateLimitError,)
+    )
+    with _app_with(tmp_path, llm) as c:
+        upload(c, "a.pdf", make_pdf("Retention is 30 days."))
+        res = c.post("/api/ask", json={"question": "How long is data kept?"})
+        with c.stream("POST", "/api/ask/stream", json={"question": "How long is data kept?"}) as s:
+            raw = "".join(s.iter_text())
+    assert res.status_code == 503 and "resets in about 5 h 40 min" in res.json()["detail"]
+    assert "event: error" in raw and "daily request limit" in raw

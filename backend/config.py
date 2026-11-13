@@ -17,6 +17,7 @@ DEFAULTS: dict[str, dict] = {
     "openai": {
         "label": "OpenAI",
         "chat_model": "gpt-4o-mini",
+        "fallback_models": "",
         "embedding_model": "text-embedding-3-small",
         "confidence_high": 0.55,
         "confidence_medium": 0.40,
@@ -24,6 +25,9 @@ DEFAULTS: dict[str, dict] = {
     "gemini": {
         "label": "Gemini",
         "chat_model": "gemini-2.5-flash",
+        # Each free-tier model has its own daily request quota; when one runs out the
+        # next is tried, which roughly triples the free questions per day.
+        "fallback_models": "gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "embedding_model": "gemini-embedding-001",
         # From live runs on the sample policies: correctly cited passages scored 0.65-0.71,
         # best passages for out-of-scope questions 0.55-0.65. Small sample; revisit with real data.
@@ -48,6 +52,9 @@ class Settings(BaseSettings):
 
     # Left empty, these take the provider's defaults above.
     chat_model: str = ""
+    # Comma-separated models to try, in order, when the chat model is rate-limited.
+    # Unset uses the provider default; set to "none" to disable.
+    fallback_models: str = ""
     embedding_model: str = ""
     confidence_high: float = 0.0
     confidence_medium: float = 0.0
@@ -82,10 +89,18 @@ class Settings(BaseSettings):
     def _apply_provider_defaults(self) -> "Settings":
         d = DEFAULTS[self.provider]
         self.chat_model = self.chat_model or d["chat_model"]
+        self.fallback_models = self.fallback_models or d["fallback_models"]
         self.embedding_model = self.embedding_model or d["embedding_model"]
         self.confidence_high = self.confidence_high or d["confidence_high"]
         self.confidence_medium = self.confidence_medium or d["confidence_medium"]
         return self
+
+    @property
+    def fallback_model_list(self) -> list[str]:
+        if self.fallback_models.strip().lower() == "none":
+            return []
+        models = [m.strip() for m in self.fallback_models.split(",") if m.strip()]
+        return [m for m in models if m != self.chat_model]
 
     @property
     def provider_label(self) -> str:

@@ -7,11 +7,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langchain_core.embeddings import Embeddings
-from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
 
 from backend.api import router
 from backend.config import Settings, get_settings
-from backend.providers import PROVIDER_ERRORS, build_models, classify
+from backend.providers import PROVIDER_ERRORS, build_models, classify, rate_limit_message
 from backend.rag import RagService
 from backend.store import DocumentStore
 
@@ -82,7 +82,7 @@ class _TooLarge(Exception):
 def create_app(
     settings: Settings | None = None,
     embeddings: Embeddings | None = None,
-    llm: BaseChatModel | None = None,
+    llm: Runnable | None = None,
 ) -> FastAPI:
     """Build the app. Tests pass fake embeddings and a fake chat model."""
     settings = settings or get_settings()
@@ -134,10 +134,8 @@ def create_app(
             logger.error("%s rejected the API key: %s", label, exc)
             return JSONResponse(status_code=502, content={"detail": f"{label} rejected the API key."})
         if kind == "rate":
-            logger.error("%s rate limit or quota: %s", label, exc)
-            return JSONResponse(
-                status_code=503, content={"detail": f"{label} rate limit or quota reached. Try again shortly."}
-            )
+            logger.warning("%s", rate_limit_message(exc, label))
+            return JSONResponse(status_code=503, content={"detail": rate_limit_message(exc, label)})
         logger.exception("Unhandled error" if kind is None else f"{label} request failed")
         detail = "Internal server error." if kind is None else f"The {label} request failed."
         return JSONResponse(status_code=500 if kind is None else 502, content={"detail": detail})

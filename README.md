@@ -70,7 +70,7 @@ named volume.
 ## Tests and evals
 
 ```bash
-backend/.venv/bin/python -m pytest -q                 # 68 offline tests, fake models, no cost
+backend/.venv/bin/python -m pytest -q                 # 72 offline tests, fake models, no cost
 backend/.venv/bin/ruff check backend
 cd frontend && npm run lint && npm run typecheck && npm run build
 npx promptfoo@latest eval -c promptfoo-tests/promptfooconfig.yaml   # live evals, see promptfoo-tests/
@@ -88,6 +88,7 @@ Set these in `backend/.env` or the environment.
 | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | (none) | Needed when the provider is `gemini` |
 | `OPENAI_API_KEY` | (none) | Needed when the provider is `openai` |
 | `LUMINA_CHAT_MODEL` | per provider | `gemini-2.5-flash` / `gpt-4o-mini` |
+| `LUMINA_FALLBACK_MODELS` | per provider | Gemini: `gemini-3.5-flash-lite,gemini-3.1-flash-lite`. Tried in order when the chat model is out of quota |
 | `LUMINA_EMBEDDING_MODEL` | per provider | `gemini-embedding-001` / `text-embedding-3-small`. Changing it re-indexes on startup |
 | `LUMINA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated, no `*` |
 | `LUMINA_DATA_DIR` | `./data` | Index, manifest and stored PDFs |
@@ -119,7 +120,12 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
 - **Scanned PDFs** without a text layer are rejected. OCR isn't included.
 - **Gemini free tier:** Google may use free-tier prompts and content to improve its
   products. Don't upload confidential policies on the free tier. Use a paid key or OpenAI
-  for those. Free-tier rate limits also apply.
+  for those.
+- **Free-tier daily limits.** Each Gemini model allows a small number of requests per day
+  (20 for `gemini-2.5-flash` at the time of writing). A follow-up question uses two. When a
+  model's quota runs out, Lumina automatically falls back to `gemini-3.5-flash-lite`, then
+  `gemini-3.1-flash-lite` (set `LUMINA_FALLBACK_MODELS`, or `none` to disable). Once all are
+  used up, the UI says when the limit resets.
 - Confidence comes from retrieval similarity, not from verifying the answer. Check the
   cited page for anything that matters.
 

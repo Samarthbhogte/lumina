@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from backend.config import Settings
 from backend.guard import looks_like_injection
 from backend.pdf import PDFError, extract_pages
-from backend.providers import classify
+from backend.providers import classify, rate_limit_message
 from backend.rag import RagService
 from backend.schemas import (
     AskRequest,
@@ -196,10 +196,13 @@ async def ask_stream(req: AskRequest, request: Request, rag: RagService = Depend
         except Exception as exc:
             kind = classify(exc)
             label = request.app.state.settings.provider_label
-            logger.exception("Streaming answer failed")
+            if kind == "rate":
+                logger.warning("%s", rate_limit_message(exc, label))
+            else:
+                logger.exception("Streaming answer failed")
             message = {
                 "auth": f"{label} rejected the API key.",
-                "rate": f"{label} rate limit or quota reached. Try again shortly.",
+                "rate": rate_limit_message(exc, label),
             }.get(kind or "", "The AI model request failed. Please try again.")
             yield _sse("error", {"message": message})
             return
