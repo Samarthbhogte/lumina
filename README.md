@@ -52,7 +52,7 @@ backend/.venv/bin/pip install -r backend/requirements-dev.txt
 backend/.venv/bin/uvicorn backend.main:app --reload --port 8000
 
 # 2. Frontend (new terminal)
-cd frontend && cp .env.example .env.local && npm install && npm run dev
+cd frontend && npm install && npm run dev
 
 # 3. Optional: load the five sample policies
 backend/.venv/bin/python -m backend.scripts.ingest_folder samples
@@ -96,7 +96,7 @@ Set these in `backend/.env` or the environment.
 | `LUMINA_TOP_K` | `6` | Passages retrieved per question |
 | `LUMINA_ENABLE_DOCS` | `true` | Swagger UI at `/docs` |
 
-The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
+The browser only talks to Next.js, which proxies `/api/*` to FastAPI. Set the target with `LUMINA_API_INTERNAL_URL` (default `http://127.0.0.1:8000`). It is read at build time.
 
 ## API
 

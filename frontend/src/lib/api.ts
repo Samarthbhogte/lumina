@@ -50,11 +50,9 @@ export interface HistoryMessage {
   content: string
 }
 
-// Accept values with or without a trailing /api so older .env files keep working.
-const API_ROOT = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000')
-  .replace(/\/+$/, '')
-  .replace(/\/api$/, '')
-const API = `${API_ROOT}/api`
+// Same-origin: Next.js proxies /api/* to FastAPI (see next.config.ts), so session cookies
+// reach every request and no CORS is needed.
+const API = '/api'
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -79,7 +77,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(`${API}${path}`, init)
   } catch {
-    throw new ApiError(`Can't reach the Lumina API at ${API_ROOT}. Is the backend running?`, 0)
+    throw new ApiError("Can't reach the Lumina API. Is the backend running?", 0)
   }
   if (!res.ok) throw await errorFrom(res)
   return (res.status === 204 ? undefined : await res.json()) as T
@@ -123,7 +121,7 @@ export async function askStream(
     })
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err
-    throw new ApiError(`Can't reach the Lumina API at ${API_ROOT}. Is the backend running?`, 0)
+    throw new ApiError("Can't reach the Lumina API. Is the backend running?", 0)
   }
   if (!res.ok || !res.body) throw await errorFrom(res)
 

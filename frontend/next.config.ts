@@ -1,6 +1,5 @@
 import type { NextConfig } from 'next'
 
-const api = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/+$/, '').replace(/\/api$/, '')
 const dev = process.env.NODE_ENV !== 'production'
 
 // Answers are model output built from uploaded documents, so treat them as untrusted:
@@ -11,16 +10,28 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  `connect-src 'self' ${api}${dev ? ' ws:' : ''}`,
+  `connect-src 'self'${dev ? ' ws:' : ''}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join('; ')
 
+// The browser talks only to this origin; /api/* is proxied to FastAPI. Same-origin keeps
+// session cookies on every request (including SSE and PDF links) and removes CORS.
+const apiInternal = (process.env.LUMINA_API_INTERNAL_URL ?? 'http://127.0.0.1:8000').replace(/\/+$/, '')
+
 const nextConfig: NextConfig = {
   output: 'standalone',
   poweredByHeader: false,
+  experimental: {
+    // Answers stream for a while and uploads embed before replying: the 30 s default is too short.
+    proxyTimeout: 300_000,
+    proxyClientMaxBodySize: '260mb',
+  },
+  async rewrites() {
+    return [{ source: '/api/:path*', destination: `${apiInternal}/api/:path*` }]
+  },
   async headers() {
     return [
       {

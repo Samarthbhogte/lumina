@@ -8,7 +8,9 @@ Retrieval is not semantic (embeddings are hash-based) and every answer is the sa
 template citing the top passages, so use it for UI and API plumbing only.
 """
 
+import asyncio
 import itertools
+import os
 from collections.abc import Iterator
 
 from langchain_core.embeddings import DeterministicFakeEmbedding
@@ -27,6 +29,17 @@ DEMO_ANSWER = (
 )
 
 
+class _SlowFake(GenericFakeChatModel):
+    """Optional per-token delay (LUMINA_DEMO_TOKEN_DELAY seconds) to make streaming visible."""
+
+    async def _astream(self, *args, **kwargs):
+        delay = float(os.getenv("LUMINA_DEMO_TOKEN_DELAY", "0"))
+        async for chunk in super()._astream(*args, **kwargs):
+            if delay:
+                await asyncio.sleep(delay)
+            yield chunk
+
+
 def _answers() -> Iterator[AIMessage]:
     # Follow-up questions make an extra "condense" call; any text works for that.
     return (AIMessage(DEMO_ANSWER) for _ in itertools.count())
@@ -36,5 +49,5 @@ settings = get_settings().model_copy(update={"data_dir": ROOT_DIR / "data-demo",
 app = create_app(
     settings,
     embeddings=DeterministicFakeEmbedding(size=256),
-    llm=GenericFakeChatModel(messages=_answers()),
+    llm=_SlowFake(messages=_answers()),
 )
