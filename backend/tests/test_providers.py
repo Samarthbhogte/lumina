@@ -11,6 +11,7 @@ from backend.config import Settings
 from backend.pdf import Page
 from backend.providers import UnitEmbeddings, build_models, classify
 from backend.store import DocumentStore
+from backend.tests.conftest import connect
 
 
 def test_gemini_defaults_and_key_aliases(tmp_path, monkeypatch):
@@ -89,7 +90,6 @@ def test_switching_embedding_model_reindexes(tmp_path):
 
 
 def test_gemini_auth_error_maps_to_502(tmp_path):
-    from fastapi.testclient import TestClient
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
     from backend.main import create_app
@@ -101,9 +101,9 @@ def test_gemini_auth_error_maps_to_502(tmp_path):
 
     settings = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g", _env_file=None)
     app = create_app(settings, embeddings=DeterministicFakeEmbedding(size=16), llm=Rejecting(messages=iter([])))
-    with TestClient(app) as c:
+    with connect(app) as c:
         upload(c, "a.pdf", make_pdf("Retention is 30 days."))
-        res = c.post("/api/ask", json={"question": "How long is data kept?"})
+        res = c.post("/w/ask", json={"question": "How long is data kept?"})
     assert res.status_code == 502 and res.json()["detail"] == "Gemini rejected the API key."
 
 
@@ -156,12 +156,11 @@ def test_rate_limit_message_reports_daily_reset():
 
 
 def _app_with(tmp_path, llm):
-    from fastapi.testclient import TestClient
 
     from backend.main import create_app
 
     settings = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g", _env_file=None)
-    return TestClient(create_app(settings, embeddings=DeterministicFakeEmbedding(size=16), llm=llm))
+    return connect(create_app(settings, embeddings=DeterministicFakeEmbedding(size=16), llm=llm))
 
 
 def test_ask_falls_back_when_primary_is_out_of_quota(tmp_path):
@@ -172,8 +171,8 @@ def test_ask_falls_back_when_primary_is_out_of_quota(tmp_path):
     )
     with _app_with(tmp_path, llm) as c:
         upload(c, "a.pdf", make_pdf("Retention is 30 days."))
-        body = c.post("/api/ask", json={"question": "How long is data kept?"}).json()
-        with c.stream("POST", "/api/ask/stream", json={"question": "How long is data kept?"}) as res:
+        body = c.post("/w/ask", json={"question": "How long is data kept?"}).json()
+        with c.stream("POST", "/w/ask/stream", json={"question": "How long is data kept?"}) as res:
             raw = "".join(res.iter_text())
     assert body["answer"] == "Fallback answer [1]." and body["cited"] == [1]
     assert "event: done" in raw and "Fallback answer" in raw
@@ -187,8 +186,8 @@ def test_all_models_out_of_quota_says_when_it_resets(tmp_path):
     )
     with _app_with(tmp_path, llm) as c:
         upload(c, "a.pdf", make_pdf("Retention is 30 days."))
-        res = c.post("/api/ask", json={"question": "How long is data kept?"})
-        with c.stream("POST", "/api/ask/stream", json={"question": "How long is data kept?"}) as s:
+        res = c.post("/w/ask", json={"question": "How long is data kept?"})
+        with c.stream("POST", "/w/ask/stream", json={"question": "How long is data kept?"}) as s:
             raw = "".join(s.iter_text())
     assert res.status_code == 503 and "resets in about 5 h 40 min" in res.json()["detail"]
     assert "event: error" in raw and "daily request limit" in raw

@@ -53,6 +53,8 @@ class Prepared:
     sources: list[Source]
     messages: list[BaseMessage] | None  # None means: answer without calling the model
     hits: dict[int, SearchHit] = field(default_factory=dict)  # source number -> full retrieved chunk
+    search_query: str | None = None  # the standalone query used for retrieval
+    model: str | None = None  # the model that actually answered (fallbacks included)
     fixed_answer: str | None = None
     flagged: bool = False
 
@@ -132,41 +134,43 @@ def assess(
 
 
 class RagService:
-    def __init__(self, store: DocumentStore, llm: Runnable, settings: Settings):
-        self.store = store
+    """Stateless over workspaces: each call gets the workspace's store and server-side history."""
+
+    def __init__(self, llm: Runnable, settings: Settings):
         self.llm = llm
         self.settings = settings
 
-    async def _search_query(self, req: AskRequest) -> str:
-        if not req.history:
-            return req.question
+    async def _search_query(self, question: str, history: list[ChatMessage]) -> str:
+        if not history:
+            return question
         messages = [
             SystemMessage(CONDENSE_PROMPT),
-            *_history_messages(req.history, self.settings.max_history_messages),
-            HumanMessage(req.question),
+            *_history_messages(history, self.settings.max_history_messages),
+            HumanMessage(question),
         ]
         result = await self.llm.ainvoke(messages)
-        query = result.text.strip()
-        return query or req.question
+        return result.text.strip() or question
 
-    async def prepare(self, req: AskRequest, flagged: bool) -> Prepared:
+    async def prepare(
+        self, req: AskRequest, store: DocumentStore, history: list[ChatMessage], flagged: bool
+    ) -> Prepared:
         if flagged:
             return Prepared(sources=[], messages=None, fixed_answer=FLAGGED, flagged=True)
-        if not await run_in_threadpool(self.store.list_documents):
+        if not await run_in_threadpool(store.list_documents):
             return Prepared(sources=[], messages=None, fixed_answer=NO_DOCUMENTS)
 
-        query = await self._search_query(req)
-        hits = await run_in_threadpool(self.store.search, query, self.settings.top_k, req.document_ids)
+        query = await self._search_query(req.question, history)
+        hits = await run_in_threadpool(store.search, query, self.settings.top_k, req.document_ids)
         if not hits:
-            return Prepared(sources=[], messages=None, fixed_answer=NOT_FOUND)
+            return Prepared(sources=[], messages=None, fixed_answer=NOT_FOUND, search_query=query)
 
         sources, context, used_hits = _format_sources(hits, self.settings.max_context_chars)
         messages = [
             SystemMessage(f"{SYSTEM_PROMPT}\n\nSources:\n{context}"),
-            *_history_messages(req.history, self.settings.max_history_messages),
+            *_history_messages(history, self.settings.max_history_messages),
             HumanMessage(req.question),
         ]
-        return Prepared(sources=sources, messages=messages, hits=used_hits)
+        return Prepared(sources=sources, messages=messages, hits=used_hits, search_query=query)
 
     def finish(self, prepared: Prepared, answer: str) -> AskResponse:
         cited = cited_numbers(answer, prepared.sources)
@@ -182,6 +186,7 @@ class RagService:
             confidence=confidence,
             found=found,
             flagged=prepared.flagged,
+            model=prepared.model,
         )
 
     @staticmethod
@@ -199,11 +204,12 @@ class RagService:
             out.append(source)
         return out
 
-    async def answer(self, req: AskRequest, flagged: bool = False) -> AskResponse:
-        prepared = await self.prepare(req, flagged)
+    async def complete(self, prepared: Prepared) -> AskResponse:
+        """Answer an already-prepared request in one call (no streaming)."""
         if prepared.messages is None:
             return self.finish(prepared, prepared.fixed_answer or NOT_FOUND)
         result = await self.llm.ainvoke(prepared.messages)
+        prepared.model = (result.response_metadata or {}).get("model_name") or prepared.model
         return self.finish(prepared, result.text.strip())
 
     async def stream(self, prepared: Prepared) -> AsyncIterator[str]:
@@ -212,5 +218,7 @@ class RagService:
             yield prepared.fixed_answer or NOT_FOUND
             return
         async for chunk in self.llm.astream(prepared.messages):
+            if name := (chunk.response_metadata or {}).get("model_name"):
+                prepared.model = name
             if text := chunk.text:
                 yield text

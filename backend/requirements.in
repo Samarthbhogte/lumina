@@ -15,3 +15,5 @@ pymupdf
 httpx
 bm25s
 PyStemmer
+sqlalchemy
+argon2-cffi

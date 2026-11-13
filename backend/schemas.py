@@ -14,7 +14,9 @@ class ChatMessage(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    history: list[ChatMessage] = Field(default_factory=list, max_length=40)
+    # Continue this conversation; omitted starts a new one. History comes from the server's
+    # record of the conversation, never from the client (forged turns were an injection path).
+    conversation_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     # Restrict retrieval to these documents. None or empty means search everything.
     document_ids: list[str] | None = None
 
@@ -48,6 +50,9 @@ class AskResponse(BaseModel):
     confidence: Confidence
     found: bool  # False when the documents don't contain an answer
     flagged: bool = False  # True when the question was rejected as an injection attempt
+    model: str | None = None  # the model that produced the answer
+    conversation_id: str | None = None
+    message_id: str | None = None  # the stored answer record (for evidence export)
 
 
 class DocumentOut(BaseModel):
@@ -75,5 +80,22 @@ class Health(BaseModel):
     ai_configured: bool
     provider: str
     chat_model: str
-    documents: int
-    chunks: int
+    needs_setup: bool  # no accounts yet
+
+
+class ConversationOut(BaseModel):
+    id: str
+    title: str
+    updated_at: str
+
+
+class StoredMessage(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    result: AskResponse | None = None  # assistant turns: the full recorded answer
+    created_at: str
+
+
+class ConversationDetail(ConversationOut):
+    messages: list[StoredMessage]

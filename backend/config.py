@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     # Interactive API docs at /docs. Turn off when the API is reachable beyond your machine.
     enable_docs: bool = True
 
+    # ---- accounts ----
+    # invite: only the first user (who becomes admin) may sign up without an invite link.
+    signup: Literal["invite", "open"] = "invite"
+    # Set true when served over HTTPS (adds Secure and the __Host- cookie prefix).
+    cookie_secure: bool = False
+    session_idle_days: int = 7
+    session_max_days: int = 30
+    # Browser origins allowed to send state-changing requests (the Next.js app).
+    trusted_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # AI questions per user per day, and across everyone (provider free tiers are small).
+    # Days roll over at midnight Pacific, when Gemini's free quotas reset.
+    daily_questions_per_user: int = 25
+    daily_questions_total: int = 55
+    max_open_stores: int = 8
+
     @field_validator("cors_origins")
     @classmethod
     def _no_wildcard(cls, v: str) -> str:
@@ -118,6 +133,14 @@ class Settings(BaseSettings):
     def embedding_id(self) -> str:
         """Identifies the vector space; the index is rebuilt when this changes."""
         return f"{self.provider}:{self.embedding_model}"
+
+    @property
+    def trusted_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.trusted_origins.split(",") if o.strip()]
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "lumina.db"
 
     @property
     def cors_origin_list(self) -> list[str]:

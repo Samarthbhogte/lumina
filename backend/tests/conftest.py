@@ -1,5 +1,6 @@
 import itertools
 import os
+from contextlib import contextmanager
 
 import pymupdf as fitz
 import pytest
@@ -68,10 +69,54 @@ def settings(tmp_path):
     return Settings(data_dir=tmp_path, openai_api_key="test-key")
 
 
+PASSWORD = "four random words make a passphrase"
+
+
+class WsClient(TestClient):
+    """A signed-in test client. Paths starting with /w/ go to the user's personal workspace,
+    and every request carries the CSRF header the browser app sends."""
+
+    ws: str = ""
+
+    def _map(self, url):
+        text = str(url)
+        for prefix in ("/w/", "http://testserver/w/"):
+            if text.startswith(prefix):
+                return text.replace("/w/", f"/api/workspaces/{self.ws}/", 1)
+        return url
+
+    def request(self, method, url, *args, **kwargs):
+        return super().request(method, self._map(url), *args, **kwargs)
+
+    def build_request(self, method, url, *args, **kwargs):  # used by both request() and stream()
+        url = self._map(url)
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers.setdefault("X-Lumina-CSRF", "1")
+        return super().build_request(method, url, *args, headers=headers, **kwargs)
+
+    def sign_in(self, email: str = "admin@example.com", name: str = "Admin", invite: str | None = None) -> dict:
+        res = self.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+        if res.status_code == 401:
+            body = {"email": email, "password": PASSWORD, "display_name": name, "invite_token": invite}
+            res = self.post("/api/auth/signup", json=body)
+        assert res.status_code == 200, res.text
+        me = res.json()
+        self.ws = next(w["id"] for w in me["workspaces"] if w["kind"] == "personal")
+        return me
+
+
+@contextmanager
+def connect(app, email: str = "admin@example.com"):
+    """Start the app and return a client signed in as `email` (signing up if needed)."""
+    with WsClient(app) as c:
+        c.sign_in(email)
+        yield c
+
+
 @pytest.fixture
 def client(settings, fake_llm):
     app = create_app(settings, embeddings=DeterministicFakeEmbedding(size=64), llm=fake_llm.model())
-    with TestClient(app) as c:
+    with connect(app) as c:
         yield c
 
 
@@ -84,4 +129,4 @@ def gdpr_pdf() -> bytes:
 
 
 def upload(client, name: str, data: bytes):
-    return client.post("/api/documents", files=[("files", (name, data, "application/pdf"))])
+    return client.post("/w/documents", files=[("files", (name, data, "application/pdf"))])

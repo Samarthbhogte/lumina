@@ -9,11 +9,13 @@ from fastapi.responses import JSONResponse
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable
 
+from backend.account_api import router as account_router
 from backend.api import router
 from backend.config import Settings, get_settings
+from backend.db import make_engine, make_sessionmaker
 from backend.providers import PROVIDER_ERRORS, build_models, classify, rate_limit_message
 from backend.rag import RagService
-from backend.store import DocumentStore
+from backend.registry import StoreRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("lumina")
@@ -94,15 +96,10 @@ def create_app(
             emb, chat = build_models(settings)
         app.state.settings = settings
         app.state.ai_ready = emb is not None and chat is not None
-        app.state.store = DocumentStore(
-            settings.data_dir,
-            emb or _MissingKeyEmbeddings(),
-            embedding_id=settings.embedding_id,
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap,
-            max_chunks=settings.max_chunks_per_document,
-        )
-        app.state.rag = RagService(app.state.store, chat, settings) if chat else None
+        app.state.engine = make_engine(settings.db_path)
+        app.state.sessionmaker = make_sessionmaker(app.state.engine)
+        app.state.registry = StoreRegistry(settings, emb or _MissingKeyEmbeddings(), settings.embedding_id)
+        app.state.rag = RagService(chat, settings) if chat else None
         if not app.state.ai_ready:
             logger.warning("%s is not set: uploads and questions are disabled.", settings.api_key_name)
         else:
@@ -110,6 +107,7 @@ def create_app(
                 "Provider %s: chat=%s embeddings=%s", settings.provider, settings.chat_model, settings.embedding_model
             )
         yield
+        app.state.engine.dispose()
 
     app = FastAPI(
         title="Lumina API",
@@ -144,6 +142,7 @@ def create_app(
     for error_type in PROVIDER_ERRORS:
         app.add_exception_handler(error_type, _provider_errors)
 
+    app.include_router(account_router)
     app.include_router(router)
     # Outermost, so the size cap and headers also apply to CORS and error responses.
     app.add_middleware(_Guard, max_body=settings.max_request_bytes)
