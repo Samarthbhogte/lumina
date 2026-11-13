@@ -87,7 +87,7 @@ Set these in `backend/.env` or the environment.
 | `LUMINA_PROVIDER` | `openai` | `gemini` or `openai` |
 | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | (none) | Needed when the provider is `gemini` |
 | `OPENAI_API_KEY` | (none) | Needed when the provider is `openai` |
-| `LUMINA_CHAT_MODEL` | per provider | `gemini-flash-latest` / `gpt-4o-mini` |
+| `LUMINA_CHAT_MODEL` | per provider | `gemini-2.5-flash` / `gpt-4o-mini` |
 | `LUMINA_EMBEDDING_MODEL` | per provider | `gemini-embedding-001` / `text-embedding-3-small`. Changing it re-indexes on startup |
 | `LUMINA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated, no `*` |
 | `LUMINA_DATA_DIR` | `./data` | Index, manifest and stored PDFs |

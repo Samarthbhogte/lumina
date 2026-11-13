@@ -17,7 +17,7 @@ def test_gemini_defaults_and_key_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "g-key")
     s = Settings(data_dir=tmp_path, provider="gemini", _env_file=None)
     assert s.api_key == "g-key" and s.api_key_name == "GOOGLE_API_KEY"
-    assert s.chat_model == "gemini-flash-latest" and s.embedding_model == "gemini-embedding-001"
+    assert s.chat_model == "gemini-2.5-flash" and s.embedding_model == "gemini-embedding-001"
     assert s.embedding_id == "gemini:gemini-embedding-001"
     assert s.provider_label == "Gemini"
 
@@ -31,7 +31,8 @@ def test_build_models_gemini_offline(tmp_path):
     s = Settings(data_dir=tmp_path, provider="gemini", google_api_key="g-key", _env_file=None)
     emb, chat = build_models(s)
     assert isinstance(emb, UnitEmbeddings) and isinstance(emb.inner, GoogleGenerativeAIEmbeddings)
-    assert isinstance(chat, ChatGoogleGenerativeAI) and chat.model.endswith("gemini-flash-latest")
+    assert isinstance(chat, ChatGoogleGenerativeAI) and chat.model.endswith("gemini-2.5-flash")
+    assert chat.thinking_budget == 0
 
 
 def test_build_models_without_key(tmp_path):

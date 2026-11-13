@@ -1,4 +1,5 @@
 import itertools
+import os
 
 import pymupdf as fitz
 import pytest
@@ -46,6 +47,15 @@ class FakeLLM:
                 yield from super()._stream(messages, *args, **kwargs)
 
         return Recording(messages=messages())
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch):
+    """Tests must not see the developer's backend/.env or shell variables."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for name in list(os.environ):
+        if name.startswith("LUMINA_") or name in ("OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture

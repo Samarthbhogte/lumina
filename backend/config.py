@@ -23,10 +23,12 @@ DEFAULTS: dict[str, dict] = {
     },
     "gemini": {
         "label": "Gemini",
-        "chat_model": "gemini-flash-latest",
+        "chat_model": "gemini-2.5-flash",
         "embedding_model": "gemini-embedding-001",
-        "confidence_high": 0.72,
-        "confidence_medium": 0.62,
+        # From live runs on the sample policies: correctly cited passages scored 0.65-0.71,
+        # best passages for out-of-scope questions 0.55-0.65. Small sample; revisit with real data.
+        "confidence_high": 0.65,
+        "confidence_medium": 0.55,
     },
 }
 

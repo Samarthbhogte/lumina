@@ -44,6 +44,16 @@ class UnitEmbeddings(Embeddings):
         return self._unit([self.inner.embed_query(text)])[0]
 
 
+def _gemini_thinking(model: str) -> dict:
+    """Grounded Q&A over short passages doesn't need long reasoning, and extended "thinking"
+    can push a free-tier request past Google's 60 s deadline. Keep it off or low."""
+    if model.startswith("gemini-2.5"):
+        return {"thinking_budget": 0}
+    if model.startswith("gemini-3"):
+        return {"thinking_level": "low"}
+    return {}
+
+
 def build_models(settings: Settings) -> tuple[Embeddings | None, BaseChatModel | None]:
     """Return (embeddings, chat model), or (None, None) when the provider's key is missing."""
     key = settings.api_key
@@ -60,6 +70,7 @@ def build_models(settings: Settings) -> tuple[Embeddings | None, BaseChatModel |
             temperature=settings.temperature,
             max_retries=2,
             timeout=60,
+            **_gemini_thinking(settings.chat_model),
         )
     else:
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
