@@ -7,8 +7,14 @@ services:
     env_file: backend/.env
     environment:
       LUMINA_CORS_ORIGINS: http://localhost:3000
-    ports:
-      - "8000:8000"
+      LUMINA_TRUSTED_ORIGINS: http://localhost:3000
+      FORWARDED_ALLOW_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"  # the compose network
+      # Set true when serving over HTTPS.
+      LUMINA_COOKIE_SECURE: "false"
+    # Not published: browsers reach the API only through the web container's /api proxy,
+    # so forwarded client-IP headers can't be spoofed from outside.
+    expose:
+      - "8000"
     volumes:
       - lumina-data:/app/data
     restart: unless-stopped

@@ -1,48 +1,63 @@
 # Lumina
 
 Ask questions about your policy and regulatory PDFs and get answers that cite the exact
-document and page. Upload GDPR, HIPAA, telecom or internal policies; Lumina retrieves the
-relevant passages, answers from them only, and links every claim to its source.
+document, clause and page. You can export them as audit-ready evidence and check a policy
+against a regulation clause by clause.
 
 ## Features
 
-- **Cited answers.** Every claim carries a `[n]` marker. Click it to see the passage and
-  open the PDF at that page.
-- **Streaming chat with follow-ups.** Answers stream token by token. A follow-up like "and
-  how long is it?" is rewritten into a standalone search using the conversation.
-- **Document library.** Drag-and-drop upload, duplicate detection, delete, and "search only
-  these documents".
-- **Honest uncertainty.** If the documents don't answer the question, Lumina says so. A
-  badge shows how closely the cited passages match the question.
-- **Guardrails.** It screens prompt injection in questions and history, and treats document
-  text as untrusted data. Answers can't load images. It enforces upload size, page and
-  chunk limits.
-- **Light and dark themes**, a responsive layout down to phone width, and keyboard and
-  screen-reader support.
+- **Clause-level citations.** Every claim carries a `[n]` marker labelled like
+  "GDPR Sample Compliance §7.2, pp.1–2". Click it to see the passage and open the PDF at that page.
+  Labels come from the document's numbering, never from the model.
+- **Better retrieval.** Documents are chunked by numbered section, so clauses that run over a
+  page break stay whole. Keyword search (BM25 with stemming) is fused with semantic search.
+  Naming a clause ("what does 3.2 say") retrieves it directly.
+- **Accounts and workspaces.** Invite-only sign-in; the first user becomes admin. Each person
+  has a personal workspace and can create team workspaces with owner, editor and viewer roles,
+  using copyable invite links. Non-members can't see that a workspace exists.
+- **Saved chats.** Conversations are stored on the server. Follow-ups are understood in context.
+- **Evidence packs.** Download any answer, or a whole chat, as a PDF. Each pack has the
+  question, the answer, the cited passages in full, the document hashes and versions, the model
+  used and a disclaimer. Its canonical data is embedded with a SHA-256 hash, so edits are
+  detectable (`POST /api/evidence/verify` or `scripts/verify_evidence.py`).
+- **Gap check.** Check which requirements of one document (say, a regulation) another
+  document (your policy) addresses. Statuses are *Addressed*, *Partially addressed*,
+  *No matching passage* and *Needs review*, never a "compliant" verdict. Every quote is checked
+  word for word against the passage. A 40-clause regulation takes about 3 AI requests, the
+  cost is estimated first, and a run stopped by quota can be resumed.
+- **Scanned PDFs.** Pages with no text layer are read with local OCR (Tesseract). OCR'd text
+  is labelled, and its confidence is capped.
+- **Honest uncertainty.** When the documents don't contain the answer, Lumina says so. The
+  confidence badge shows how closely the cited passages match the question.
+- **Guardrails.** Prompt injection is screened, and document text is treated as data.
+  Answers can't load images, and a CSP is set. Sessions use HttpOnly cookies with CSRF checks,
+  login attempts are throttled, every user has a daily AI quota, and an audit log records
+  security-relevant events.
 
 ## How it works
 
 ```
-Next.js 16 UI ──SSE──▶ FastAPI ──▶ DocumentStore (FAISS + manifest + original PDFs)
-                         │                     ▲
-                         └──▶ RAG: retrieve top-k page chunks ──▶ Gemini or OpenAI chat model
+Browser ──▶ Next.js 16 (UI + /api proxy, one origin) ──▶ FastAPI
+                                                         ├─ SQLite: users, workspaces, sessions, chats, answers, audit
+                                                         ├─ per-workspace DocumentStore: FAISS + BM25 + PDFs
+                                                         └─ Gemini or OpenAI (chat with fallbacks, embeddings)
 ```
 
-1. **Ingest.** PyMuPDF extracts text page by page. Each page is split into about 1,000-character
-   chunks tagged with `document_id`, `filename` and `page`. The chunks are embedded
-   (`gemini-embedding-001` or `text-embedding-3-small`) and stored in one shared FAISS index.
-   If you switch provider, existing documents are re-embedded from the stored PDFs on startup.
-2. **Ask.** The question (condensed with chat history if needed) retrieves the top 6
-   chunks. These go to the model as numbered `<source>` blocks with instructions to cite
-   them and to refuse when they don't contain the answer.
-3. **Answer.** The API streams `sources`, then `token` events, then a `done` event with
-   which sources were cited, `found`, and a confidence level based on retrieval
-   similarity.
+1. **Ingest.** PyMuPDF extracts page text, using OCR for scans. The chunker splits documents
+   into numbered sections and clauses, keeping a clause-to-page map. It guards against
+   tables of contents, page headers and footers, and stray numbers. Chunks are embedded
+   with their document and section context.
+2. **Ask.** A follow-up is first rewritten into a standalone query using the stored
+   conversation. Semantic and keyword results are fused, and each section is returned
+   at most once. The top passages go to the model as numbered `<source>` blocks.
+3. **Answer.** Answers stream over SSE. The server picks the cited clause, assesses
+   confidence and stores the answer, which is what evidence exports are built from.
 
 ## Quick start
 
-Requirements: Python 3.12, Node 22, and an API key for **Gemini** (free tier: get one at
-https://aistudio.google.com/apikey) or **OpenAI**.
+Requirements: Python 3.12, Node 22, and an API key for **Gemini** (free tier at
+https://aistudio.google.com/apikey) or **OpenAI**. For scanned PDFs, Tesseract is optional
+(`brew install tesseract`).
 
 ```bash
 # 1. Backend
@@ -53,30 +68,36 @@ backend/.venv/bin/uvicorn backend.main:app --reload --port 8000
 
 # 2. Frontend (new terminal)
 cd frontend && npm install && npm run dev
-
-# 3. Optional: load the five sample policies
-backend/.venv/bin/python -m backend.scripts.ingest_folder samples
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. The first visit shows **Create the admin account**. That account
+adopts any library left from Lumina v2, after a backup is taken.
 
-**No key? Use demo mode.** `backend/.venv/bin/uvicorn backend.devserver:app --port 8000`
-runs the real API with fake embeddings and a scripted model. It's free and works offline,
-which is good for UI work. Retrieval isn't semantic in this mode.
+To load the five sample policies into your personal workspace:
 
-**Docker:** `docker compose up --build`. This reads `backend/.env` and keeps data in a
-named volume.
+```bash
+backend/.venv/bin/python -m backend.scripts.ingest_folder samples --email you@example.com
+```
+
+**No key? Use demo mode.** `backend/.venv/bin/uvicorn backend.devserver:app --port 8000` runs
+the real API with fake embeddings and a scripted model, free and offline.
+
+**Docker:** `docker compose up --build`. This includes Tesseract, reads `backend/.env`, and
+keeps data in a named volume.
 
 ## Tests and evals
 
 ```bash
-backend/.venv/bin/python -m pytest -q                 # 72 offline tests, fake models, no cost
-backend/.venv/bin/ruff check backend
+backend/.venv/bin/python -m pytest -q                       # 130 offline tests (fake models, no cost)
+backend/.venv/bin/python -m backend.scripts.retrieval_eval  # golden-set retrieval: dense vs keyword vs hybrid
 cd frontend && npm run lint && npm run typecheck && npm run build
-npx promptfoo@latest eval -c promptfoo-tests/promptfooconfig.yaml   # live evals, see promptfoo-tests/
+npx promptfoo@latest eval -c promptfoo-tests/promptfooconfig.yaml   # 11 live checks (uses your AI quota)
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, tests, the build, `pip-audit` and `npm audit`.
+The retrieval eval scores 40 questions over the samples, using cached real embeddings, so
+it needs no API calls. Current results are recall@1 1.00 and MRR 1.00. The set is small,
+in-sample and written by the developer, so treat it as a regression floor, not a benchmark.
+CI runs lint, tests, the build, `pip-audit` and `npm audit`.
 
 ## Configuration
 
@@ -85,57 +106,56 @@ Set these in `backend/.env` or the environment.
 | Variable | Default | |
 | --- | --- | --- |
 | `LUMINA_PROVIDER` | `openai` | `gemini` or `openai` |
-| `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | (none) | Needed when the provider is `gemini` |
-| `OPENAI_API_KEY` | (none) | Needed when the provider is `openai` |
+| `GOOGLE_API_KEY` / `OPENAI_API_KEY` | (none) | Key for the chosen provider |
 | `LUMINA_CHAT_MODEL` | per provider | `gemini-2.5-flash` / `gpt-4o-mini` |
-| `LUMINA_FALLBACK_MODELS` | per provider | Gemini: `gemini-3.5-flash-lite,gemini-3.1-flash-lite`. Tried in order when the chat model is out of quota |
-| `LUMINA_EMBEDDING_MODEL` | per provider | `gemini-embedding-001` / `text-embedding-3-small`. Changing it re-indexes on startup |
-| `LUMINA_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated, no `*` |
-| `LUMINA_DATA_DIR` | `./data` | Index, manifest and stored PDFs |
+| `LUMINA_FALLBACK_MODELS` | per provider | Gemini: `gemini-3.5-flash-lite,gemini-3.1-flash-lite`, used when out of quota |
+| `LUMINA_EMBEDDING_MODEL` | per provider | Changing it re-indexes on startup |
+| `LUMINA_SIGNUP` | `invite` | `open` lets anyone create an account |
+| `LUMINA_COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
+| `LUMINA_TRUSTED_ORIGINS` | `http://localhost:3000` | Browser origins allowed to make changes |
+| `LUMINA_DAILY_QUESTIONS_PER_USER` / `_TOTAL` | `25` / `55` | AI questions per day (reset at midnight Pacific) |
+| `LUMINA_OCR` | `auto` | `off` to never OCR scanned pages |
+| `LUMINA_DATA_DIR` | `./data` | SQLite database plus one folder per workspace |
 | `LUMINA_MAX_UPLOAD_MB` / `LUMINA_MAX_FILES_PER_UPLOAD` | `25` / `10` | |
-| `LUMINA_TOP_K` | `6` | Passages retrieved per question |
 | `LUMINA_ENABLE_DOCS` | `true` | Swagger UI at `/docs` |
 
-The browser only talks to Next.js, which proxies `/api/*` to FastAPI. Set the target with `LUMINA_API_INTERNAL_URL` (default `http://127.0.0.1:8000`). It is read at build time.
+The browser only talks to Next.js, which proxies `/api/*` to FastAPI. Set the target with
+`LUMINA_API_INTERNAL_URL` (default `http://127.0.0.1:8000`), which is read at build time.
 
-## API
+## API (all under `/api`; state changes need the `X-Lumina-CSRF: 1` header)
 
-| Method | Path | |
-| --- | --- | --- |
-| `GET` | `/api/health` | Status, model, document and chunk counts |
-| `GET` | `/api/documents` | List documents |
-| `POST` | `/api/documents` | Upload PDFs (multipart field `files`) |
-| `DELETE` | `/api/documents/{id}` | Remove a document and its chunks |
-| `GET` | `/api/documents/{id}/file` | The original PDF (add `#page=N` in a browser) |
-| `POST` | `/api/ask` | `{question, history?, document_ids?}` → answer JSON |
-| `POST` | `/api/ask/stream` | Same input, server-sent events |
+| Area | Routes |
+| --- | --- |
+| Accounts | `GET auth/setup`, `POST auth/signup`, `auth/login`, `auth/logout`, `auth/password`, `auth/reset`; `GET auth/me`, `auth/sessions` |
+| Workspaces | `GET/POST workspaces`; `PATCH/DELETE workspaces/{ws}`; `GET/PATCH/DELETE …/members/{user}`; `GET/POST/DELETE …/invites`; `GET invites/{token}`, `POST invites/{token}/accept` |
+| Documents | `GET/POST workspaces/{ws}/documents`; `DELETE …/documents/{id}`; `GET …/documents/{id}/file`; `GET …/documents/history` |
+| Questions | `POST workspaces/{ws}/ask` and `…/ask/stream` with `{question, conversation_id?, document_ids?}`; `GET/DELETE …/conversations[/{id}]` |
+| Evidence | `GET …/answers/{id}/export`, `GET …/conversations/{id}/export`, `POST evidence/verify` |
+| Gap check | `POST …/comparisons/estimate`, `POST …/comparisons`, `POST …/comparisons/{id}/resume`, `GET …/comparisons[/{id}]` |
 
-## Limits and next steps
+## Limits
 
-- **No authentication.** Run it on your machine or a trusted network. Anyone who can reach
-  the API can upload, delete, and use up your provider quota. Accounts and per-user
-  workspaces are the natural next step.
-- **One process owns `data/`.** Run a single uvicorn worker, and add files through the API
-  (the ingest script does).
-- **Scanned PDFs** without a text layer are rejected. OCR isn't included.
-- **Gemini free tier:** Google may use free-tier prompts and content to improve its
-  products. Don't upload confidential policies on the free tier. Use a paid key or OpenAI
-  for those.
-- **Free-tier daily limits.** Each Gemini model allows a small number of requests per day
-  (20 for `gemini-2.5-flash` at the time of writing). A follow-up question uses two. When a
-  model's quota runs out, Lumina automatically falls back to `gemini-3.5-flash-lite`, then
-  `gemini-3.1-flash-lite` (set `LUMINA_FALLBACK_MODELS`, or `none` to disable). Once all are
-  used up, the UI says when the limit resets.
-- Confidence comes from retrieval similarity, not from verifying the answer. Check the
-  cited page for anything that matters.
+- **Self-hosted, small teams.** There's no email: invite and password-reset links are
+  copied by hand. There's no SSO or billing. Run one uvicorn worker, because one process
+  owns `data/`.
+- **Gemini free tier.** Google may use free-tier content to improve its products, so don't
+  upload confidential policies there; use a paid key or OpenAI instead. Daily limits are small
+  (20 requests per model). Lumina falls back to other free models, then says when the limit
+  resets.
+- **Confidence measures retrieval similarity**, not legal correctness. A gap check can miss a
+  passage, which is why its status reads "No matching passage" rather than "Missing". Always
+  check the cited page.
 
 ## Layout
 
 ```
-backend/    FastAPI app: main.py (app factory), api.py (routes), store.py, rag.py, providers.py, pdf.py, guard.py
-  tests/    pytest suite      scripts/  ingest_folder.py, finetune/ (earlier experiments)
-frontend/   Next.js app: src/components/Workspace.tsx is the main screen
-samples/    five simulated policy PDFs for trying it out
+backend/    main.py (app), api.py, account_api.py, compare_api.py, auth.py, db.py, quota.py,
+            store.py, registry.py, chunking.py, hybrid.py, citations.py, rag.py, evidence.py,
+            compare.py, pdf.py, providers.py, guard.py, migrate.py
+  tests/    pytest suite (+ eval/ golden set and embedding cache)
+  scripts/  ingest_folder, retrieval_eval, verify_evidence, finetune/ (earlier experiments)
+frontend/   Next.js: app/ (login, invite, reset, w/[wsId]), components/
+docs/       PRODUCT-BRIEF.md, V3-PLAN.md
+samples/    five simulated policy PDFs
 promptfoo-tests/   live grounded-answer evals
-notebooks/  original LangChain / LangGraph exploration
 ```

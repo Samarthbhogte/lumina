@@ -16,6 +16,7 @@ interface Props {
 export function WorkspaceSwitcher({ workspaces, current, onManage }: Props) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
+  const [choice, setChoice] = useState(current.id)
 
   const create = async () => {
     const name = window.prompt('Name for the new team workspace', 'Compliance team')?.trim()
@@ -39,8 +40,8 @@ export function WorkspaceSwitcher({ workspaces, current, onManage }: Props) {
       <div className="flex items-center gap-1.5">
         <select
           id="workspace-switcher"
-          value={current.id}
-          onChange={(e) => router.push(`/w/${e.target.value}`)}
+          value={choice}
+          onChange={(e) => setChoice(e.target.value)}
           className="min-w-0 flex-1 truncate rounded-md border border-field bg-surface px-2 py-1.5 text-sm"
         >
           {workspaces.map((w) => (
@@ -49,6 +50,15 @@ export function WorkspaceSwitcher({ workspaces, current, onManage }: Props) {
             </option>
           ))}
         </select>
+        {choice !== current.id && (
+          <button
+            type="button"
+            onClick={() => router.push(`/w/${choice}`)}
+            className="shrink-0 rounded-md bg-ink px-2 py-1.5 text-xs font-medium text-paper hover:opacity-90"
+          >
+            Open
+          </button>
+        )}
         <button
           type="button"
           onClick={create}

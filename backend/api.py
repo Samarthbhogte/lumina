@@ -7,6 +7,7 @@ get 404, so other workspaces' existence and documents are never revealed.
 import json
 import logging
 import re
+import time
 from contextlib import aclosing
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from backend import __version__, evidence, quota
@@ -48,7 +50,8 @@ def HexId():  # noqa: N802 - a fresh Path() per parameter (sharing one breaks Fa
     return PathParam(pattern=r"^[0-9a-f]{32}$")
 
 
-_streaming_users: set[str] = set()  # one answer in flight per user
+_streaming_users: dict[str, float] = {}  # user id -> start time: one answer in flight per user
+STREAM_LOCK_SECONDS = 180  # backstop if a disconnected request never releases its claim
 
 
 def get_settings(request: Request) -> Settings:
@@ -393,22 +396,36 @@ async def ask_stream(
     rag: RagService = Depends(get_rag),
 ) -> StreamingResponse:
     """Server-sent events: `sources`, then `token` events, then `done` (or `error`)."""
-    if user.id in _streaming_users:
+    started = _streaming_users.get(user.id)
+    if started and time.monotonic() - started < STREAM_LOCK_SECONDS:
         return JSONResponse(status_code=429, content={"detail": "Wait for your current answer to finish."})
-    settings, ws, conv, flagged = await _begin(request, db, user, workspace_id, req)
+    _streaming_users[user.id] = time.monotonic()  # claim before any await, so parallel requests can't slip in
+    try:
+        settings, ws, conv, flagged = await _begin(request, db, user, workspace_id, req)
+    except BaseException:
+        _streaming_users.pop(user.id, None)
+        raise
     history = _history(db, conv, settings.max_history_messages)
     borrow = request.app.state.registry.use(workspace_id)
     store = borrow.__enter__()
+    released = False
+
+    def release():  # idempotent: runs from the stream's finally or the background task, whichever first
+        nonlocal released
+        if not released:
+            released = True
+            _streaming_users.pop(user.id, None)
+            borrow.__exit__(None, None, None)
+
     try:
         prepared = await rag.prepare(req, store, history, flagged)
     except BaseException:
-        borrow.__exit__(None, None, None)
+        release()
         if not flagged:
             quota.refund(db, user.id)
         raise
     if prepared.messages is None and not flagged and not history:
         quota.refund(db, user.id)
-    _streaming_users.add(user.id)
     user_id, ws_id, conv_id = user.id, ws.id, conv.id if conv else None
     sessionmaker = request.app.state.sessionmaker
 
@@ -451,11 +468,11 @@ async def ask_stream(
                 return
             yield _sse("done", final.model_dump())
         finally:
-            _streaming_users.discard(user_id)
-            borrow.__exit__(None, None, None)
+            release()
 
     return StreamingResponse(
         events(),
+        background=BackgroundTask(release),  # also runs if the client left before streaming began
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
@@ -558,13 +575,30 @@ def document_history(
 
 
 @router.post("/evidence/verify")
-async def verify_evidence(file: UploadFile = File(...), user: User = Depends(current_user)) -> dict:
+async def verify_evidence(
+    file: UploadFile = File(...), user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict:
     data = await file.read(25 * 1024 * 1024 + 1)
     if len(data) > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File is too large.")
     valid, message, record = await run_in_threadpool(evidence.verify_pack, data)
+    # The embedded hash only shows the content is self-consistent; anyone could recompute it.
+    # Matching a hash this server logged at export time is what shows the pack is genuine.
+    recorded = False
+    if valid and record:
+        sha = evidence.digest(record)
+        recorded = any(
+            (e.detail or {}).get("sha256") == sha
+            for e in db.scalars(select(AuditEvent).where(AuditEvent.event == "evidence.exported"))
+        )
+        message = (
+            f"{message} It matches a pack exported by this Lumina server."
+            if recorded
+            else f"{message} But this server has no record of exporting it, so treat it as unverified."
+        )
     return {
         "valid": valid,
+        "exported_by_this_server": recorded,
         "message": message,
         "exported_at": record.get("exported_at") if record else None,
         "answers": len(record.get("answers", [])) if record else 0,

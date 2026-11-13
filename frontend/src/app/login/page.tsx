@@ -28,7 +28,7 @@ export default function LoginPage() {
     done,
   )
 
-  if (setup === null) return <AuthShell title="Lumina">{null}</AuthShell>
+  if (setup === null) return <AuthShell title="Lumina"><p role="status" className="text-sm text-muted">Loading…</p></AuthShell>
 
   if (setup) {
     return (
@@ -36,7 +36,7 @@ export default function LoginPage() {
         title="Create the admin account"
         subtitle="You're the first person here. This account will own the existing library and can invite others."
       >
-        <form onSubmit={create.submit} className="space-y-4">
+        <form onSubmit={create.submit} aria-describedby={create.error ? "form-error" : undefined} className="space-y-4">
           <Field label="Your name" name="name" autoComplete="name" required />
           <Field label="Email" name="email" type="email" autoComplete="email" required />
           <Field label="Password" name="password" type="password" autoComplete="new-password" minLength={15} required hint={PASSWORD_HINT} />
@@ -49,7 +49,7 @@ export default function LoginPage() {
 
   return (
     <AuthShell title="Sign in" subtitle="New here? Ask a workspace owner for an invite link.">
-      <form onSubmit={login.submit} className="space-y-4">
+      <form onSubmit={login.submit} aria-describedby={login.error ? "form-error" : undefined} className="space-y-4">
         <Field label="Email" name="email" type="email" autoComplete="email" required />
         <Field label="Password" name="password" type="password" autoComplete="current-password" required />
         <FormError error={login.error} />

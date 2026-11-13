@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
 
@@ -71,7 +71,7 @@ export function SubmitButton({ busy, children }: { busy: boolean; children: Reac
   return (
     <button
       type="submit"
-      disabled={busy}
+      aria-disabled={busy} /* stays focusable while busy; useSubmit ignores repeat submits */
       className={cn(
         'w-full rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-paper hover:opacity-90',
         busy && 'cursor-wait opacity-70',
@@ -83,9 +83,13 @@ export function SubmitButton({ busy, children }: { busy: boolean; children: Reac
 }
 
 export function FormError({ error }: { error: string | null }) {
+  const ref = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    if (error) ref.current?.focus() // so the next Tab continues from the problem, not the page top
+  }, [error])
   if (!error) return null
   return (
-    <p role="alert" className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">
+    <p ref={ref} id="form-error" tabIndex={-1} role="alert" className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad outline-none">
       {error}
     </p>
   )

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import Path as PathParam
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend import quota
@@ -31,7 +32,7 @@ from backend.auth import (
     verify_password,
 )
 from backend.config import Settings
-from backend.db import ROLES, AuthSession, Invite, Membership, PasswordReset, User, Workspace, now
+from backend.db import ROLES, AuthSession, Invite, Membership, Meta, PasswordReset, User, Workspace, now
 from backend.migrate import migrate_legacy_library
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,16 @@ def signup(body: Signup, request: Request, response: Response, db: Session = Dep
         is_admin=first_user,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+        if first_user:  # a unique row: of two simultaneous first sign-ups, only one becomes admin
+            db.add(Meta(key="first_admin", value=user.id))
+            db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="Setup was just completed by someone else. Sign in instead."
+        ) from exc
     personal = Workspace(name=f"{user.display_name}'s workspace", kind="personal", created_by=user.id)
     db.add(personal)
     db.flush()

@@ -55,7 +55,7 @@ def test_gap_check_classifies_and_verifies_quotes(tmp_path, fake_llm):
         assert first["requirement"]["text"].startswith("Personal data must be encrypted")
         assert first["match"]["label"].startswith("Policy") and "encrypt" in first["match"]["excerpt"]
         assert len(fake_llm.calls) == 1  # four requirements, one AI request
-        assert c.get("/api/auth/me").json()["questions_used_today"] == 1
+        assert c.get("/api/auth/me").json()["questions_used_today"] == 2  # retrieval + one AI batch
         listed = c.get("/w/comparisons").json()
         assert listed[0]["title"] == "Policy.pdf vs Regulation.pdf" and "rows" not in listed[0]
 
@@ -68,9 +68,9 @@ def test_weak_matches_skip_the_model(tmp_path, fake_llm):
 
 
 def test_quota_stop_is_saved_and_resumable(tmp_path, fake_llm):
-    with connect(_setup(tmp_path, fake_llm, daily_questions_per_user=0)) as c:
-        body = c.post("/w/comparisons", json=_ids(c)).json()
-        assert body["status"] == "partial" and "used your 0 questions" in body["note"]
+    with connect(_setup(tmp_path, fake_llm, daily_questions_per_user=1)) as c:
+        body = c.post("/w/comparisons", json=_ids(c)).json()  # retrieval uses the only question
+        assert body["status"] == "partial" and "used your 1 questions" in body["note"]
         c.app.state.settings.daily_questions_per_user = 5
         resumed = c.post(f"/w/comparisons/{body['id']}/resume").json()
         assert resumed["status"] == "done" and len(resumed["rows"]) == 4
@@ -106,3 +106,18 @@ def test_embedding_rate_limit_during_retrieval_is_resumable(tmp_path, fake_llm, 
         assert body["status"] == "partial" and "rate limit" in body["note"] and len(body["rows"]) == 2
         resumed = c.post(f"/w/comparisons/{body['id']}/resume").json()
         assert resumed["status"] == "done" and len(resumed["rows"]) == 4
+
+
+def test_viewers_cannot_run_gap_checks_and_zero_quota_is_refused(tmp_path, fake_llm):
+    from backend.tests.conftest import WsClient
+
+    app = _setup(tmp_path, fake_llm)
+    with connect(app) as owner, WsClient(app) as viewer:
+        ws = owner.post("/api/workspaces", json={"name": "T"}).json()["id"]
+        link = owner.post(f"/api/workspaces/{ws}/invites", json={"role": "viewer"}).json()["link"]
+        viewer.sign_in("v@example.com", "V", invite=link.rsplit("/", 1)[-1])
+        owner.ws = ws
+        ids = _ids(owner)
+        assert viewer.post(f"/api/workspaces/{ws}/comparisons", json=ids).status_code == 403
+        app.state.settings.daily_questions_per_user = 0
+        assert owner.post(f"/api/workspaces/{ws}/comparisons", json=ids).status_code == 429

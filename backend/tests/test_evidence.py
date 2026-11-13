@@ -91,3 +91,20 @@ def test_document_history_records_versions(app):
         assert history[1]["filename"] == "Breach_Policy.pdf" and len(history[1]["sha256"]) == 64
         assert history[1]["by"] == "Admin"
         assert c.get("/api/auth/me").status_code == 200
+
+
+def test_verify_distinguishes_server_exports_from_recomputed_hashes(app):
+    from backend.evidence import HASH_PREFIX, canonical, digest
+
+    with connect(app) as c:
+        pack = c.get(f"/w/answers/{_answer(c)['message_id']}/export").content
+        genuine = c.post("/api/evidence/verify", files=[("file", ("p.pdf", pack, "application/pdf"))]).json()
+        assert genuine["valid"] and genuine["exported_by_this_server"] is True
+        doc = pymupdf.open("pdf", pack)
+        record = json.loads(doc.embfile_get("evidence.json"))
+        record["answers"][0]["answer"] = "You are fully compliant."
+        doc.embfile_del("evidence.json")
+        doc.embfile_add("evidence.json", canonical(record))
+        doc.set_metadata({**doc.metadata, "keywords": HASH_PREFIX + digest(record)})  # forger recomputes the hash
+        forged = c.post("/api/evidence/verify", files=[("file", ("f.pdf", doc.tobytes(), "application/pdf"))]).json()
+        assert forged["valid"] and forged["exported_by_this_server"] is False and "unverified" in forged["message"]

@@ -25,6 +25,7 @@ export function MembersDialog({ workspaceId, open, onClose }: { workspaceId: str
   const [invites, setInvites] = useState<Invite[]>([])
   const [role, setRole] = useState<Role>('viewer')
   const [link, setLink] = useState<string | null>(null)
+  const [pending, setPending] = useState<Record<string, Role>>({})
 
   const load = useCallback(async () => {
     try {
@@ -76,7 +77,7 @@ export function MembersDialog({ workspaceId, open, onClose }: { workspaceId: str
             <label htmlFor="invite-role" className="sr-only">
               Role for the invite
             </label>
-            <select id="invite-role" value={role} onChange={(e) => setRole(e.target.value as Role)} className="rounded-md border border-field bg-surface px-2 py-1.5 text-sm">
+            <select id="invite-role" autoFocus value={role} onChange={(e) => setRole(e.target.value as Role)} className="rounded-md border border-field bg-surface px-2 py-1.5 text-sm">
               {ROLES.map((r) => (
                 <option key={r} value={r}>
                   {r}
@@ -140,8 +141,8 @@ export function MembersDialog({ workspaceId, open, onClose }: { workspaceId: str
                 </label>
                 <select
                   id={`role-${m.user_id}`}
-                  value={m.role}
-                  onChange={(e) => act(() => setMemberRole(workspaceId, m.user_id, e.target.value as Role))}
+                  value={pending[m.user_id] ?? m.role}
+                  onChange={(e) => setPending((p) => ({ ...p, [m.user_id]: e.target.value as Role }))}
                   className="rounded-md border border-field bg-surface px-2 py-1 text-xs"
                 >
                   {ROLES.map((r) => (
@@ -150,6 +151,20 @@ export function MembersDialog({ workspaceId, open, onClose }: { workspaceId: str
                     </option>
                   ))}
                 </select>
+                {pending[m.user_id] && pending[m.user_id] !== m.role && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const role = pending[m.user_id]
+                      if (m.role === 'owner' && !window.confirm(`Remove owner rights from ${m.display_name}?`)) return
+                      setPending((p) => Object.fromEntries(Object.entries(p).filter(([k]) => k !== m.user_id)))
+                      void act(() => setMemberRole(workspaceId, m.user_id, role))
+                    }}
+                    className="rounded-md bg-ink px-2 py-1 text-xs font-medium text-paper hover:opacity-90"
+                  >
+                    Save
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => window.confirm(`Remove ${m.display_name} from this workspace?`) && act(() => removeMember(workspaceId, m.user_id))}

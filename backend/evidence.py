@@ -219,8 +219,13 @@ def verify_pack(pdf: bytes) -> tuple[bool, str, dict | None]:
         if not keywords.startswith(HASH_PREFIX) or "evidence.json" not in doc.embfile_names():
             return False, "This PDF is not a Lumina evidence pack.", None
         expected = keywords[len(HASH_PREFIX) :]
-        record = json.loads(doc.embfile_get("evidence.json"))
+        try:
+            record = json.loads(doc.embfile_get("evidence.json"))
+        except (ValueError, UnicodeDecodeError):
+            return False, "The embedded record is unreadable.", None
+    if not isinstance(record, dict):
+        return False, "The embedded record is malformed.", None
     actual = digest(record)
     if actual != expected:
         return False, f"Modified: the recorded content hashes to {actual}, but the pack claims {expected}.", record
-    return True, f"Intact: SHA-256 {actual} matches.", record
+    return True, f"Unchanged since export: SHA-256 {actual} matches its embedded record.", record

@@ -270,3 +270,30 @@ def test_audit_log_records_security_events(app, gdpr_pdf):
     # (the test helper tries to sign in before signing up, so a failed login comes first)
     assert events.index("user.signup") < events.index("document.uploaded")
     assert events.count("auth.login_failed") == 2
+
+
+def test_one_users_failed_logins_dont_lock_them_out_from_elsewhere(app):
+    from backend import auth
+
+    with connect(app) as c:
+        with app.state.sessionmaker() as db:
+            for _ in range(5):
+                auth.record_login_failure(db, "admin@example.com", "203.0.113.9")  # attacker's IP
+            db.commit()
+            assert auth.login_blocked(db, "admin@example.com", "203.0.113.9")
+            assert not auth.login_blocked(db, "admin@example.com", "testclient")
+        c.post("/api/auth/logout")
+        assert c.post("/api/auth/login", json={"email": "admin@example.com", "password": PASSWORD}).status_code == 200
+
+
+def test_refund_is_atomic_and_never_negative(tmp_path):
+    from backend import quota
+    from backend.db import make_engine, make_sessionmaker
+
+    settings = Settings(data_dir=tmp_path, daily_questions_per_user=5, daily_questions_total=100)
+    maker = make_sessionmaker(make_engine(tmp_path / "q.db"))
+    with maker() as db:
+        quota.reserve(db, settings, "u1")
+        quota.refund(db, "u1")
+        quota.refund(db, "u1")
+        assert quota.used_today(db, "u1") == 0

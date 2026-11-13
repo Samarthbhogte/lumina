@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -43,9 +44,12 @@ def _take(db: Session, scope: str, limit: int) -> bool:
 
 
 def _give_back(db: Session, scope: str) -> None:
-    row = db.get(Usage, {"scope": scope, "window": _day(), "kind": KIND})
-    if row and row.count > 0:
-        row.count -= 1
+    # One atomic UPDATE, so a concurrent reservation can't be overwritten.
+    db.execute(
+        update(Usage)
+        .where(Usage.scope == scope, Usage.window == _day(), Usage.kind == KIND, Usage.count > 0)
+        .values(count=Usage.count - 1)
+    )
 
 
 def reserve(db: Session, settings: Settings, user_id: str) -> None:

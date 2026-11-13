@@ -38,7 +38,8 @@ _COMMON = {
 }
 
 LOGIN_WINDOW_MINUTES = 15
-MAX_FAILURES_PER_ACCOUNT = 5
+MAX_FAILURES_PER_ACCOUNT = 5  # per account from one IP
+MAX_FAILURES_PER_ACCOUNT_ANY_IP = 50  # slows distributed guessing without letting a stranger lock you out
 MAX_FAILURES_PER_IP = 20
 CSRF_HEADER = "x-lumina-csrf"
 
@@ -127,7 +128,9 @@ def end_session(db: Session, settings: Settings, request: Request, response: Res
         found = db.get(AuthSession, token_hash(token))
         if found:
             db.delete(found)
-    response.delete_cookie(cookie_name(settings), path="/")
+    response.delete_cookie(
+        cookie_name(settings), path="/", secure=settings.cookie_secure, httponly=True, samesite="lax"
+    )
 
 
 def end_all_sessions(db: Session, user_id: str) -> None:
@@ -212,12 +215,14 @@ def _failures(db: Session, scope: str) -> int:
 
 def login_blocked(db: Session, email: str, ip: str) -> bool:
     return (
-        _failures(db, f"email:{email}") >= MAX_FAILURES_PER_ACCOUNT or _failures(db, f"ip:{ip}") >= MAX_FAILURES_PER_IP
+        _failures(db, f"email:{email}|ip:{ip}") >= MAX_FAILURES_PER_ACCOUNT
+        or _failures(db, f"email:{email}") >= MAX_FAILURES_PER_ACCOUNT_ANY_IP
+        or _failures(db, f"ip:{ip}") >= MAX_FAILURES_PER_IP
     )
 
 
 def record_login_failure(db: Session, email: str, ip: str) -> None:
-    for scope in (f"email:{email}", f"ip:{ip}"):
+    for scope in (f"email:{email}|ip:{ip}", f"email:{email}", f"ip:{ip}"):
         stmt = insert(Usage).values(scope=scope, window=_window(), kind="login_fail", count=1)
         db.execute(
             stmt.on_conflict_do_update(index_elements=["scope", "window", "kind"], set_={"count": Usage.count + 1})

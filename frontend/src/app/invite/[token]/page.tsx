@@ -36,15 +36,15 @@ export default function InvitePage() {
     return acceptInvite(token)
   }, (ws) => open(ws.id))
 
-  if (error) return <AuthShell title="Invite unavailable" subtitle={error}>{null}</AuthShell>
-  if (!invite) return <AuthShell title="Lumina">{null}</AuthShell>
+  if (error) return <AuthShell title="Invite unavailable" subtitle={error}><p role="status" className="text-sm text-muted">Loading…</p></AuthShell>
+  if (!invite) return <AuthShell title="Lumina"><p role="status" className="text-sm text-muted">Loading…</p></AuthShell>
 
   const subtitle = `You've been invited to “${invite.workspace}” as ${invite.role === 'owner' ? 'an' : 'a'} ${invite.role}.`
 
   if (invite.signed_in) {
     return (
       <AuthShell title="Join workspace" subtitle={subtitle}>
-        <form onSubmit={accept.submit} className="space-y-4">
+        <form onSubmit={accept.submit} aria-describedby={accept.error ? "form-error" : undefined} className="space-y-4">
           <FormError error={accept.error} />
           <SubmitButton busy={accept.busy}>Accept invite</SubmitButton>
         </form>
@@ -55,14 +55,14 @@ export default function InvitePage() {
   return (
     <AuthShell title="Join workspace" subtitle={subtitle}>
       {haveAccount ? (
-        <form onSubmit={login.submit} className="space-y-4">
+        <form onSubmit={login.submit} aria-describedby={login.error ? "form-error" : undefined} className="space-y-4">
           <Field label="Email" name="email" type="email" autoComplete="email" required />
           <Field label="Password" name="password" type="password" autoComplete="current-password" required />
           <FormError error={login.error} />
           <SubmitButton busy={login.busy}>Sign in and join</SubmitButton>
         </form>
       ) : (
-        <form onSubmit={join.submit} className="space-y-4">
+        <form onSubmit={join.submit} aria-describedby={join.error ? "form-error" : undefined} className="space-y-4">
           <Field label="Your name" name="name" autoComplete="name" required />
           <Field label="Email" name="email" type="email" autoComplete="email" required />
           <Field label="Password" name="password" type="password" autoComplete="new-password" minLength={15} required hint={PASSWORD_HINT} />

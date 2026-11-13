@@ -11,7 +11,7 @@ export default function ResetPage() {
   const reset = useSubmit((f) => resetPassword(token, String(f.get('password'))), () => router.replace('/login'))
   return (
     <AuthShell title="Choose a new password" subtitle="This signs you out on every device.">
-      <form onSubmit={reset.submit} className="space-y-4">
+      <form onSubmit={reset.submit} aria-describedby={reset.error ? "form-error" : undefined} className="space-y-4">
         <Field label="New password" name="password" type="password" autoComplete="new-password" minLength={15} required hint={PASSWORD_HINT} />
         <FormError error={reset.error} />
         <SubmitButton busy={reset.busy}>Set password</SubmitButton>

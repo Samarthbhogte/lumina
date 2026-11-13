@@ -422,7 +422,7 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
                 title="Check which requirements of one document another addresses"
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink"
               >
-                <ListChecks size={15} aria-hidden /> <span className="hidden sm:inline">Gap check</span>
+                <ListChecks size={15} aria-hidden /> <span className="sr-only sm:not-sr-only">Gap check</span>
               </button>
             )}
             {messages.length > 0 && conversationId && !busy && (
@@ -432,7 +432,7 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
                   title="Download every answer in this chat as an audit-ready PDF"
                   className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink"
                 >
-                  <FileDown size={15} aria-hidden /> <span className="hidden sm:inline">Export chat</span>
+                  <FileDown size={15} aria-hidden /> <span className="sr-only sm:not-sr-only">Export chat</span>
                 </a>
             )}
             {messages.length > 0 && (
@@ -442,7 +442,7 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
                 onClick={newChat}
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
               >
-                <SquarePen size={15} aria-hidden /> <span className="hidden sm:inline">New chat</span>
+                <SquarePen size={15} aria-hidden /> <span className="sr-only sm:not-sr-only">New chat</span>
               </button>
             )}
           </div>

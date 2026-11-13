@@ -14,6 +14,7 @@ Statuses never claim compliance: addressed / partially addressed / no matching p
 needs review. A missing match can be a retrieval miss, which is why it isn't called "missing".
 """
 
+import html
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -25,6 +26,8 @@ from backend.citations import clause_label, section_label
 from backend.store import DocumentStore
 
 BATCH = 15
+MAX_REQUIREMENTS = 200
+MIN_QUOTE_WORDS = 6  # a one-word "quote" proves nothing
 CANDIDATES_PER_REQUIREMENT = 3
 STATUSES = ("addressed", "partial", "not_found", "needs_review")
 _CLAUSE_LINE = re.compile(r"^(\d{1,2}(?:\.\d{1,2})+)\.?\s+(.+)$", re.MULTILINE)
@@ -119,10 +122,17 @@ async def classify_batch(llm: Runnable, batch: list[tuple[Requirement, list]]) -
     """One AI request for up to BATCH requirements that have candidate passages."""
     blocks = []
     for req, hits in batch:
-        passages = "\n".join(f'  <passage n="{i}">{hit.text}</passage>' for i, hit in enumerate(hits, 1))
-        blocks.append(f'<requirement id="{req.id}">\n  {req.text}\n{passages}\n</requirement>')
+        # Escape document text so a policy can't close a tag and forge another requirement.
+        passages = "\n".join(
+            f'  <passage n="{i}">{html.escape(hit.text, quote=False)}</passage>' for i, hit in enumerate(hits, 1)
+        )
+        blocks.append(
+            f'<requirement id="{req.id}">\n  {html.escape(req.text, quote=False)}\n{passages}\n</requirement>'
+        )
     result = await llm.ainvoke([SystemMessage(SYSTEM), HumanMessage("\n\n".join(blocks))])
-    answers = {str(a.get("id")): a for a in _parse_json(result.text)}
+    parsed = _parse_json(result.text)
+    ids = [str(a.get("id")) for a in parsed]
+    answers = {i: a for i, a in zip(ids, parsed, strict=True) if ids.count(i) == 1}  # duplicates are ignored
 
     rows = []
     for req, hits in batch:
@@ -137,7 +147,8 @@ async def classify_batch(llm: Runnable, batch: list[tuple[Requirement, list]]) -
         hit = hits[n - 1] if isinstance(n, int) and 1 <= n <= len(hits) else hits[0]
         quote = str(a.get("quote") or "").strip()
         rationale = str(a.get("rationale") or "")[:300]
-        if status in ("addressed", "partial") and (not quote or _normalise(quote) not in _normalise(hit.text)):
+        too_short = len(quote.split()) < MIN_QUOTE_WORDS
+        if status in ("addressed", "partial") and (too_short or _normalise(quote) not in _normalise(hit.text)):
             status, rationale = "needs_review", "The quoted words were not found in the passage; check manually."
         rows.append(Row(asdict(req), status, _match(hit), quote=quote[:400], rationale=rationale))
     return rows

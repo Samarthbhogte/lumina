@@ -41,6 +41,8 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
   const [result, setResult] = useState<Comparison | null>(null)
   const [history, setHistory] = useState<Comparison[]>([])
   const [running, setRunning] = useState(false)
+  const [announce, setAnnounce] = useState('')
+  const resultsHeading = useRef<HTMLHeadingElement>(null)
 
   const loadHistory = useCallback(() => {
     listComparisons(workspaceId).then(setHistory).catch(() => setHistory([]))
@@ -67,11 +69,21 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
   }, [workspaceId, requirements, policy])
 
   const go = async (action: () => Promise<Comparison>) => {
+    if (running) return
     setRunning(true)
+    setAnnounce('Checking requirements…')
     try {
-      setResult(await action())
+      const done = await action()
+      setResult(done)
+      setAnnounce(
+        done.status === 'partial'
+          ? `Stopped early: ${done.rows?.length ?? 0} of ${done.total_requirements} checked. ${done.note ?? ''}`
+          : `Done: ${done.summary?.headline ?? 'finished'}.`,
+      )
+      requestAnimationFrame(() => resultsHeading.current?.focus())
       loadHistory()
     } catch (e) {
+      setAnnounce(`The gap check failed: ${errorText(e)}`)
       toast.error('The gap check failed', { description: errorText(e) })
     } finally {
       setRunning(false)
@@ -101,6 +113,9 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
       </div>
 
       <div className="max-h-[75vh] overflow-y-auto px-5 py-4">
+        <p role="status" className="sr-only">
+          {announce}
+        </p>
         <div className="grid gap-3 sm:grid-cols-2">
           {(
             [
@@ -114,6 +129,7 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
               </label>
               <select
                 id={id}
+                autoFocus={id === 'gap-req'}
                 value={value}
                 onChange={(e) => {
                   set(e.target.value)
@@ -142,7 +158,8 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
           </p>
           <button
             type="button"
-            disabled={!pairReady || running || !estimate || estimate.requirements === 0}
+            disabled={!pairReady || !estimate || estimate.requirements === 0}
+            aria-disabled={running}
             onClick={() => go(() => runComparison(workspaceId, { requirements_document_id: requirements, policy_document_id: policy }))}
             className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper hover:opacity-90 disabled:opacity-50"
           >
@@ -153,7 +170,9 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
         {result && (
           <section className="mt-5" aria-label="Gap check results">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="font-medium">{result.title}</h3>
+              <h3 ref={resultsHeading} tabIndex={-1} className="font-medium outline-none">
+                {result.title}
+              </h3>
               {result.summary && <p className="text-sm text-muted">{result.summary.headline}</p>}
             </div>
             {result.status === 'partial' && (
@@ -161,12 +180,13 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
                 <span className="flex-1">
                   Stopped early: {result.note} {(result.rows?.length ?? 0)} of {result.total_requirements} checked; progress is saved.
                 </span>
-                <button type="button" disabled={running} onClick={() => go(() => resumeComparison(workspaceId, result.id))} className="inline-flex items-center gap-1 font-medium underline">
+                <button type="button" aria-disabled={running} onClick={() => go(() => resumeComparison(workspaceId, result.id))} className="inline-flex items-center gap-1 font-medium underline">
                   <RotateCw size={13} aria-hidden /> Resume
                 </button>
               </div>
             )}
-            <table className="mt-3 w-full border-collapse text-sm">
+            <div className="mt-3 overflow-x-auto" role="region" aria-label="Gap check results table" tabIndex={0}>
+            <table className="w-full min-w-[34rem] border-collapse text-sm">
               <caption className="sr-only">Requirement-by-requirement results</caption>
               <thead>
                 <tr className="border-b border-line text-left text-xs text-faint uppercase">
@@ -199,6 +219,7 @@ export function GapCheckDialog({ workspaceId, documents, open, onClose, onUsedQu
                 })}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 

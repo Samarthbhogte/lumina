@@ -76,7 +76,7 @@ def estimate(
 async def _run(request: Request, db: Session, user: User, comp: Comparison, rag: RagService) -> Comparison:
     settings = request.app.state.settings
     with request.app.state.registry.use(comp.workspace_id) as store:
-        reqs = compare.requirements_of(store, comp.requirements_document_id)
+        reqs = compare.requirements_of(store, comp.requirements_document_id)[: compare.MAX_REQUIREMENTS]
         if not reqs:
             raise HTTPException(
                 status_code=422,
@@ -149,9 +149,13 @@ async def run_comparison(
     db: Session = Depends(get_db),
     rag: RagService = Depends(get_rag),
 ) -> dict:
-    require_role(db, user, workspace_id, "viewer")
+    require_role(db, user, workspace_id, "editor")  # runs cost AI quota (embeddings and model calls)
     with request.app.state.registry.use(workspace_id) as store:
         req, pol = _documents(store, body)
+    try:
+        quota.reserve(db, request.app.state.settings, user.id)  # one question's worth for the retrieval step
+    except quota.QuotaExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": str(exc.retry_after)}) from exc
     comp = Comparison(
         workspace_id=workspace_id,
         created_by=user.id,
@@ -174,10 +178,12 @@ async def resume_comparison(
     db: Session = Depends(get_db),
     rag: RagService = Depends(get_rag),
 ) -> dict:
-    require_role(db, user, workspace_id, "viewer")
+    require_role(db, user, workspace_id, "editor")
     comp = db.get(Comparison, comparison_id)
     if comp is None or comp.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Comparison not found.")
+    if comp.status == "running":
+        raise HTTPException(status_code=409, detail="This check is already running.")
     if comp.status == "done":
         return _out(comp)
     comp.status = "running"
