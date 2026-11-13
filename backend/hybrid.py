@@ -19,8 +19,16 @@ RRF_K = 60
 CANDIDATES = 20  # taken from each retriever before fusion
 
 _stemmer = Stemmer.Stemmer("english")
-_CLAUSE_REF = re.compile(r"\b(\d{1,2})\.(\d{1,2})\b")
-_SECTION_REF = re.compile(r"(?:§|\bsection|\bclause|\bpart)\s*(\d{1,2})(?![.\d])", re.IGNORECASE)
+# A clause number only counts as a reference with an explicit cue ("clause 3.2", "§7.2",
+# "what does 3.2 say"), so "version 2.5" or "$1.50" don't steer retrieval.
+_CLAUSE_REF = re.compile(
+    r"(?:§|\bclause|\bsection|\barticle|\bpara(?:graph)?)\s*(\d{1,2}(?:\.\d{1,2})+)\b"
+    r"|\b(\d{1,2}(?:\.\d{1,2})+)\s+(?:say|says|state|states|require|requires|mean|cover|covers)\b",
+    re.IGNORECASE,
+)
+_SECTION_REF = re.compile(r"(?:§|\bsection|\bclause)\s*(\d{1,2})(?![.\d])", re.IGNORECASE)
+CLAUSE_BOOST = 0.05  # RRF scores top out near 0.033, so this outranks without swamping relevance
+SECTION_BOOST = 0.02
 
 
 def _tokens(texts: list[str]) -> list[list[str]]:
@@ -71,14 +79,13 @@ def fuse(*rankings: list[str], k: int = RRF_K) -> dict[str, float]:
     return scores
 
 
+def clause_refs(query: str) -> list[str]:
+    return [a or b for a, b in _CLAUSE_REF.findall(query)]
+
+
 def reference_boost(query: str, metadata: dict) -> float:
-    """Strongly prefer chunks containing a clause or section the question names ("what does 3.2 say")."""
-    boost = 0.0
+    """Prefer chunks containing a clause or section the question explicitly names."""
     clauses = metadata.get("clauses") or {}
-    for major, minor in _CLAUSE_REF.findall(query):
-        if f"{int(major)}.{int(minor)}" in clauses:
-            boost += 1.0
-    for section in _SECTION_REF.findall(query):
-        if metadata.get("section") == str(int(section)):
-            boost += 0.5
+    boost = sum(CLAUSE_BOOST for ref in clause_refs(query) if ref in clauses)
+    boost += sum(SECTION_BOOST for sec in _SECTION_REF.findall(query) if metadata.get("section") == str(int(sec)))
     return boost

@@ -32,7 +32,7 @@ from langchain_community.vectorstores.utils import DistanceStrategy
 from langchain_core.embeddings import Embeddings
 
 from backend.chunking import CHUNKER_VERSION, chunk_document
-from backend.hybrid import CANDIDATES, Entry, KeywordIndex, fuse, reference_boost
+from backend.hybrid import CANDIDATES, Entry, KeywordIndex, clause_refs, fuse, reference_boost
 from backend.pdf import Page, extract_pages
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,7 @@ class DocumentStore:
         self._lock = threading.RLock()
         self._keywords = KeywordIndex([])
         self._positions: dict[str, int] = {}
+        self._keywords_stale = True  # rebuilt lazily on the next search after a change
         self._docs, index_sha, built_with = self._load_manifest()
         self._index: FAISS | None = self._load_index(index_sha, built_with)
         self._refresh_keywords()
@@ -227,7 +228,12 @@ class DocumentStore:
             return next((d for d in self._docs.values() if d.sha256 == sha256), None)
 
     def _refresh_keywords(self) -> None:
+        """Mark the keyword index stale; it is rebuilt on the next search (cheap uploads)."""
+        self._keywords_stale = True
+
+    def _rebuild_keywords(self) -> None:
         """Rebuild the in-memory BM25 index and the chunk-id -> vector-position map."""
+        self._keywords_stale = False
         if self._index is None:
             self._keywords, self._positions = KeywordIndex([]), {}
             return
@@ -253,6 +259,8 @@ class DocumentStore:
         with self._lock:
             if self._index is None:
                 return []
+            if self._keywords_stale:
+                self._rebuild_keywords()
             allowed = set(document_ids) if document_ids else None
             total = self._index.index.ntotal
             kwargs: dict = {}
@@ -268,6 +276,16 @@ class DocumentStore:
             keyword_ids = self._keywords.search(query, allowed=allowed) if strategy != "dense" else []
 
             fused = fuse(dense_ids, keyword_ids)
+            # A clause the question names explicitly ("what does 3.2 say") is always a candidate,
+            # even if neither retriever ranked it.
+            refs = set(clause_refs(query))
+            if refs:
+                for entry in self._keywords.entries:
+                    if allowed and entry.document_id not in allowed:
+                        continue
+                    md = self._index.docstore.search(entry.chunk_id).metadata
+                    if refs & set(md.get("clauses") or {}):
+                        fused.setdefault(entry.chunk_id, 0.0)
             docs = {cid: self._index.docstore.search(cid) for cid in fused}
             for cid, doc in docs.items():
                 fused[cid] += reference_boost(query, doc.metadata)
@@ -277,10 +295,17 @@ class DocumentStore:
             hits: list[SearchHit] = []
             seen_sections: set[tuple] = set()
             per_document: dict[str, int] = {}
+            # Spread results across documents, unless the search is limited to one document.
+            cap = k if allowed and len(allowed) == 1 else 3
             for cid in sorted(fused, key=fused.get, reverse=True):
                 md = docs[cid].metadata
-                section_key = (md["document_id"], md.get("section") or cid)
-                if section_key in seen_sections or per_document.get(md["document_id"], 0) >= 3:
+                # One hit per section, except parts of a section that was split (their clauses differ).
+                section_key = (
+                    md["document_id"],
+                    md.get("section") or cid,
+                    tuple(sorted(md.get("clauses") or {})) or cid,
+                )
+                if section_key in seen_sections or per_document.get(md["document_id"], 0) >= cap:
                     continue
                 seen_sections.add(section_key)
                 per_document[md["document_id"]] = per_document.get(md["document_id"], 0) + 1
