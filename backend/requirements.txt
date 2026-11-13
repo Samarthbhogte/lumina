@@ -22,6 +22,8 @@ anyio==4.16.0
     #   watchfiles
 attrs==26.1.0
     # via aiohttp
+bm25s==0.3.16
+    # via -r requirements.in
 certifi==2026.10.23
     # via
     #   httpcore
@@ -127,6 +129,7 @@ networkx==3.7
     # via pymupdf
 numpy==2.5.4
     # via
+    #   bm25s
     #   faiss-cpu
     #   langchain-community
     #   onnxruntime
@@ -191,6 +194,8 @@ pymupdf4llm==2.1
     # via
     #   pymupdf
     #   pymupdf-layout
+pystemmer==3.1.0
+    # via -r requirements.in
 python-dotenv==1.2.4
     # via
     #   pydantic-settings

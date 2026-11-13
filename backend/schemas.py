@@ -34,6 +34,11 @@ class Source(BaseModel):
     page: int
     snippet: str
     score: float
+    page_end: int | None = None
+    section: str | None = None
+    heading: str | None = None
+    clause: str | None = None  # set once the answer shows which clause was relied on
+    label: str = ""  # e.g. "GDPR Sample Compliance §7.2, p.1"
 
 
 class AskResponse(BaseModel):

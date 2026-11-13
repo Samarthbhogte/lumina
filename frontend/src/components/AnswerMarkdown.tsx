@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 interface Props {
   text: string
-  validSources: Set<number>
+  validSources: Map<number, string> // source number -> citation label
   activeSource: number | null
   onCite: (n: number) => void
   streaming?: boolean
@@ -33,7 +33,8 @@ function AnswerMarkdownImpl({ text, validSources, activeSource, onCite, streamin
               type="button"
               data-cite
               onClick={() => onCite(n)}
-              aria-label={`Source ${n}`}
+              aria-label={`Source ${n}: ${validSources.get(n)}`}
+              title={validSources.get(n)}
               aria-pressed={activeSource === n}
               className={cn(
                 // 20px chip with a 24px invisible hit area (WCAG 2.5.8).

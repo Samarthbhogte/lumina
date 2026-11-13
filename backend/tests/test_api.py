@@ -161,3 +161,20 @@ def test_without_api_key_ai_routes_return_503(tmp_path):
         assert c.get("/api/documents").status_code == 200
         assert c.post("/api/ask", json={"question": "Is this ok?"}).status_code == 503
         assert upload(c, "a.pdf", make_pdf("hi")).status_code == 503
+
+
+def test_citations_name_the_clause(client, fake_llm):
+    text = (
+        "Breach Policy\n7. Breach Notification\n7.1 Incidents are triaged and documented.\n"
+        "7.2 Notices to authorities follow statutory timelines.\n8. Transfers\n8.1 SCCs are required.\n"
+        "9. Other\n9.1 None."
+    )
+    upload(client, "Breach_Policy.pdf", make_pdf(text))
+    fake_llm.answers = ["Notices to authorities follow statutory timelines [1]."]
+    body = client.post("/api/ask", json={"question": "When are authorities notified of breaches?"}).json()
+    cited = [s for s in body["sources"] if s["n"] in body["cited"]]
+    assert cited and cited[0]["section"] in {"7", "8", "9"}
+    s7 = [s for s in body["sources"] if s["section"] == "7"]
+    if s7 and s7[0]["n"] in body["cited"]:
+        assert s7[0]["clause"] == "7.2" and s7[0]["label"] == "Breach Policy §7.2, p.1"
+    assert all(s["label"] for s in body["sources"])

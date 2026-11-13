@@ -17,6 +17,11 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
   { source, cited, active, onSelect },
   ref,
 ) {
+  // "GDPR Sample Compliance §7.2, pp.1–2" -> name "GDPR Sample Compliance", where "§7.2, pp.1–2".
+  const label = source.label || `${source.filename}, p.${source.page}`
+  const split = label.search(/ §|, pp?\./)
+  const docName = split > 0 ? label.slice(0, split) : label
+  const where = split > 0 ? label.slice(split).replace(/^,\s*/, '').trim() : ''
   return (
     <li
       ref={ref}
@@ -40,11 +45,13 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
           {source.n}
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium" title={source.filename}>
-            {source.filename}
+          {/* The document name may truncate; the clause and page must always stay visible. */}
+          <p className="flex min-w-0 items-baseline gap-1.5 text-sm" title={`${source.label} (${source.filename})`}>
+            <span className="truncate font-medium">{docName}</span>
+            <span className="shrink-0 font-mono text-xs text-accent">{where}</span>
           </p>
-          <p className="text-xs text-muted">
-            Page {source.page}
+          <p className="truncate text-xs text-muted">
+            {source.heading ?? `Page ${source.page}`}
             {!cited && ' · retrieved, not cited'}
           </p>
         </div>
@@ -58,7 +65,7 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
           <span className="sr-only">{`${source.filename}, page ${source.page}, in a new tab`}</span>
         </a>
       </div>
-      <blockquote className="mt-2 line-clamp-6 border-l-2 border-line pl-3 font-serif text-[0.9rem] leading-relaxed text-muted">
+      <blockquote className="mt-2 line-clamp-6 border-l-2 border-line pl-3 font-serif text-[0.9rem] leading-relaxed whitespace-pre-line text-muted">
         {source.snippet}
       </blockquote>
     </li>

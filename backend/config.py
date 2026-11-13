@@ -29,10 +29,10 @@ DEFAULTS: dict[str, dict] = {
         # next is tried, which roughly triples the free questions per day.
         "fallback_models": "gemini-3.5-flash-lite,gemini-3.1-flash-lite",
         "embedding_model": "gemini-embedding-001",
-        # From live runs on the sample policies: correctly cited passages scored 0.65-0.71,
-        # best passages for out-of-scope questions 0.55-0.65. Small sample; revisit with real data.
-        "confidence_high": 0.65,
-        "confidence_medium": 0.55,
+        # From the golden-set eval (backend/tests/eval, section chunks): correct passages scored
+        # 0.68-0.80 (median 0.74); best passages for out-of-scope questions 0.55-0.64.
+        "confidence_high": 0.70,
+        "confidence_medium": 0.64,
     },
 }
 

@@ -26,11 +26,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 from langchain_community.vectorstores import FAISS
 from langchain_community.vectorstores.utils import DistanceStrategy
 from langchain_core.embeddings import Embeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from backend.chunking import CHUNKER_VERSION, chunk_document
+from backend.hybrid import CANDIDATES, Entry, KeywordIndex, fuse, reference_boost
 from backend.pdf import Page, extract_pages
 
 logger = logging.getLogger(__name__)
@@ -61,14 +63,19 @@ class SearchHit:
     document_id: str
     filename: str
     page: int
-    # Inner product. OpenAI embeddings are unit-length, so this is cosine similarity:
-    # roughly 0 (unrelated) to 1 (identical).
+    # Cosine similarity to the question (embeddings are unit length): roughly 0 (unrelated)
+    # to 1 (identical). Confidence is based on this, never on fusion ranks.
     score: float
+    page_end: int | None = None
+    section: str | None = None
+    heading: str | None = None
+    clauses: dict | None = None  # clause id -> [first page, last page]
 
 
 @dataclass
 class _Chunks:
-    texts: list[str]
+    texts: list[str]  # stored passage text
+    search_texts: list[str]  # embedded + keyword-indexed (passage with document/section context)
     metadatas: list[dict]
     ids: list[str]
 
@@ -95,12 +102,16 @@ class DocumentStore:
         os.chmod(self.data_dir, 0o700)
 
         self._embeddings = embeddings
-        self.embedding_id = embedding_id
-        self._splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        # The chunker version is part of the id, so changing how documents are split re-indexes them.
+        self.embedding_id = f"{embedding_id}#chunker{CHUNKER_VERSION}"
+        self._chunk_size, self._chunk_overlap = chunk_size, chunk_overlap
         self._max_chunks = max_chunks
         self._lock = threading.RLock()
+        self._keywords = KeywordIndex([])
+        self._positions: dict[str, int] = {}
         self._docs, index_sha, built_with = self._load_manifest()
         self._index: FAISS | None = self._load_index(index_sha, built_with)
+        self._refresh_keywords()
 
     # ---------- persistence ----------
 
@@ -158,7 +169,7 @@ class DocumentStore:
             path = self.file_path(record.id)
             try:
                 chunks = self._chunk(record.id, record.filename, extract_pages(path.read_bytes()))
-                vectors = self._embeddings.embed_documents(chunks.texts)
+                vectors = self._embeddings.embed_documents(chunks.search_texts)
             except Exception:
                 logger.exception("Could not re-index %s; it stays listed but unsearchable", record.filename)
                 continue
@@ -175,6 +186,7 @@ class DocumentStore:
         self._index = index
         self._save_index()
         self._save_manifest()
+        self._refresh_keywords()
         return index
 
     def _save_index(self) -> None:
@@ -214,46 +226,100 @@ class DocumentStore:
         with self._lock:
             return next((d for d in self._docs.values() if d.sha256 == sha256), None)
 
-    def search(self, query: str, k: int = 6, document_ids: list[str] | None = None) -> list[SearchHit]:
+    def _refresh_keywords(self) -> None:
+        """Rebuild the in-memory BM25 index and the chunk-id -> vector-position map."""
+        if self._index is None:
+            self._keywords, self._positions = KeywordIndex([]), {}
+            return
+        self._positions = {cid: pos for pos, cid in self._index.index_to_docstore_id.items()}
+        entries = []
+        for cid in self._positions:
+            doc = self._index.docstore.search(cid)
+            context = doc.metadata.get("context", "")
+            entries.append(Entry(cid, doc.metadata["document_id"], f"{context}\n{doc.page_content}"))
+        self._keywords = KeywordIndex(entries)
+
+    def search(
+        self, query: str, k: int = 6, document_ids: list[str] | None = None, strategy: str = "hybrid"
+    ) -> list[SearchHit]:
+        """Hybrid retrieval: vector + BM25 candidates fused by reciprocal rank, then diversified.
+
+        strategy "dense" or "keyword" uses one retriever only (for evaluation/ablation).
+        """
         with self._lock:
             if self._index is None:
                 return []
-        vector = self._embeddings.embed_query(query)  # network call: outside the lock
+        vector = np.asarray(self._embeddings.embed_query(query), dtype=np.float32)  # network: outside lock
         with self._lock:
             if self._index is None:
                 return []
+            allowed = set(document_ids) if document_ids else None
+            total = self._index.index.ntotal
             kwargs: dict = {}
-            if document_ids:
-                allowed = set(document_ids)
+            if allowed:
                 filt: Callable[[dict], bool] = lambda md: md.get("document_id") in allowed  # noqa: E731
-                # FAISS filters after fetching fetch_k neighbours. A flat index is cheap to
-                # scan fully, and anything smaller can miss small documents entirely.
-                kwargs = {"filter": filt, "fetch_k": self._index.index.ntotal}
-            results = self._index.similarity_search_with_score_by_vector(vector, k=k, **kwargs)
-        return [
-            SearchHit(
-                text=doc.page_content,
-                document_id=doc.metadata["document_id"],
-                filename=doc.metadata["filename"],
-                page=doc.metadata["page"],
-                score=float(score),
+                # FAISS filters after fetching fetch_k neighbours; a flat index is cheap to scan fully.
+                kwargs = {"filter": filt, "fetch_k": total}
+            dense = self._index.similarity_search_with_score_by_vector(
+                vector.tolist(), k=min(CANDIDATES, total), **kwargs
             )
-            for doc, score in results
-        ]
+            cosine = {doc.metadata["chunk_id"]: float(score) for doc, score in dense}
+            dense_ids = list(cosine) if strategy != "keyword" else []
+            keyword_ids = self._keywords.search(query, allowed=allowed) if strategy != "dense" else []
+
+            fused = fuse(dense_ids, keyword_ids)
+            docs = {cid: self._index.docstore.search(cid) for cid in fused}
+            for cid, doc in docs.items():
+                fused[cid] += reference_boost(query, doc.metadata)
+                if cid not in cosine:  # keyword-only hit: compute its cosine for confidence
+                    cosine[cid] = float(np.dot(self._index.index.reconstruct(self._positions[cid]), vector))
+
+            hits: list[SearchHit] = []
+            seen_sections: set[tuple] = set()
+            per_document: dict[str, int] = {}
+            for cid in sorted(fused, key=fused.get, reverse=True):
+                md = docs[cid].metadata
+                section_key = (md["document_id"], md.get("section") or cid)
+                if section_key in seen_sections or per_document.get(md["document_id"], 0) >= 3:
+                    continue
+                seen_sections.add(section_key)
+                per_document[md["document_id"]] = per_document.get(md["document_id"], 0) + 1
+                hits.append(
+                    SearchHit(
+                        text=docs[cid].page_content,
+                        document_id=md["document_id"],
+                        filename=md["filename"],
+                        page=md["page"],
+                        score=cosine[cid],
+                        page_end=md.get("page_end"),
+                        section=md.get("section"),
+                        heading=md.get("heading"),
+                        clauses=md.get("clauses") or None,
+                    )
+                )
+                if len(hits) >= k:
+                    break
+        return hits
 
     # ---------- mutations ----------
 
     def _chunk(self, doc_id: str, filename: str, pages: list[Page]) -> _Chunks:
-        texts, metas = [], []
-        for page in pages:
-            for text in self._splitter.split_text(page.text):
-                texts.append(text)
-                metas.append({"document_id": doc_id, "filename": filename, "page": page.number})
-        if len(texts) > self._max_chunks:
+        chunks = chunk_document(pages, doc_id, filename, self._chunk_size, self._chunk_overlap)
+        if len(chunks) > self._max_chunks:
             raise DocumentTooLarge(
-                f"This document has too much text ({len(texts)} chunks; the limit is {self._max_chunks})."
+                f"This document has too much text ({len(chunks)} chunks; the limit is {self._max_chunks})."
             )
-        return _Chunks(texts=texts, metadatas=metas, ids=[uuid.uuid4().hex for _ in texts])
+        ids = [uuid.uuid4().hex for _ in chunks]
+        metadatas = [
+            {**c.metadata, "chunk_id": cid, "context": c.search_text.split("\n", 1)[0]}
+            for c, cid in zip(chunks, ids, strict=True)
+        ]
+        return _Chunks(
+            texts=[c.text for c in chunks],
+            search_texts=[c.search_text for c in chunks],
+            metadatas=metadatas,
+            ids=ids,
+        )
 
     def add(self, filename: str, data: bytes, pages: list[Page]) -> tuple[DocumentRecord, bool]:
         """Index a parsed PDF. Returns (record, created); created is False for a duplicate."""
@@ -263,7 +329,7 @@ class DocumentStore:
 
         doc_id = uuid.uuid4().hex
         chunks = self._chunk(doc_id, filename, pages)
-        vectors = self._embeddings.embed_documents(chunks.texts)  # slow network call: outside the lock
+        vectors = self._embeddings.embed_documents(chunks.search_texts)  # slow network call: outside the lock
         pairs = list(zip(chunks.texts, vectors, strict=True))
 
         with self._lock:
@@ -291,6 +357,7 @@ class DocumentStore:
                 self._docs[doc_id] = record
                 self._save_index()
                 self._save_manifest()
+                self._refresh_keywords()
             except Exception:
                 # Undo everything so the index never holds chunks the manifest doesn't own.
                 self._docs.pop(doc_id, None)
@@ -299,6 +366,7 @@ class DocumentStore:
                 elif self._index is not None:
                     self._delete_chunks(chunks.ids)
                 self.file_path(doc_id).unlink(missing_ok=True)
+                self._refresh_keywords()
                 raise
         logger.info("Indexed %s: %d pages, %d chunks", filename, len(pages), len(chunks.ids))
         return record, True
@@ -320,6 +388,7 @@ class DocumentStore:
             del self._docs[document_id]
             self._save_index()
             self._save_manifest()
+            self._refresh_keywords()
             self.file_path(document_id).unlink(missing_ok=True)
         logger.info("Deleted %s (%s)", record.filename, document_id)
         return True

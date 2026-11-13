@@ -75,3 +75,36 @@ tests:
     assert:
       - type: javascript
         value: output.flagged === true
+
+  # ---- v3: clause-level citations ----
+  - description: Cited sources carry a section label (e.g. "§3.2, p.1")
+    vars:
+      question: How can users withdraw consent?
+    assert:
+      - type: javascript
+        value: output.sources.filter(s => output.cited.includes(s.n)).every(s => /§\d+(\.\d+)?, pp?\./.test(s.label))
+      - type: javascript
+        value: output.sources.filter(s => output.cited.includes(s.n)).some(s => s.clause === '3.2')
+
+  - description: A clause split across a page break is answered in full (GDPR 7.2)
+    vars:
+      question: When must notices be sent to authorities and data subjects after a breach?
+    assert:
+      - type: javascript
+        value: output.found && /statutory timelines/i.test(output.answer)
+      - type: javascript
+        value: output.sources.some(s => s.filename.startsWith('GDPR') && s.section === '7' && s.page_end === 2)
+
+  - description: Asking for a clause by number retrieves that clause
+    vars:
+      question: What does clause 3.2 of the company data policy say?
+    assert:
+      - type: javascript
+        value: output.found && output.sources[0].filename.startsWith('Company_DataPolicy') && output.sources[0].section === '3'
+
+  - description: A breach question draws on both GDPR and HIPAA policies
+    vars:
+      question: Compare how the GDPR and HIPAA policies handle breach notification.
+    assert:
+      - type: javascript
+        value: (f => f.some(n => n.startsWith('GDPR')) && f.some(n => n.startsWith('HIPAA')))(output.sources.filter(s => output.cited.includes(s.n)).map(s => s.filename))

@@ -85,7 +85,7 @@ def test_switching_embedding_model_reindexes(tmp_path):
     assert switched._index.index.d == 48
     import json
 
-    assert json.loads((tmp_path / "documents.json").read_text())["embedding_id"] == "gemini:emb"
+    assert json.loads((tmp_path / "documents.json").read_text())["embedding_id"] == "gemini:emb#chunker2"
 
 
 def test_gemini_auth_error_maps_to_502(tmp_path):

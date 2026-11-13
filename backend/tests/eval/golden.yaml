@@ -1,0 +1,83 @@
+# Retrieval golden set over samples/*.pdf.
+# expect: any listed "<filename prefix>:<clause>" counts as a correct retrieval.
+# Questions with expect: [] are out of scope (should not match strongly).
+- q: How can users withdraw consent?
+  expect: [Company_DataPolicy:3.2]
+- q: Does the company sell personal data?
+  expect: [Company_DataPolicy:4.2]
+- q: How are security incidents escalated at the company?
+  expect: [Company_DataPolicy:6.2]
+- q: What happens when the company receives a report of underage use?
+  expect: [Company_DataPolicy:7.2]
+- q: How are material updates to the data policy announced?
+  expect: [Company_DataPolicy:8.1]
+- q: What does clause 3.2 of the company data policy say?
+  expect: [Company_DataPolicy:3.2]
+- q: Can users ask for their data to be deleted?
+  expect: [Company_DataPolicy:5.2, GDPR_Sample:3.1]
+- q: When must notices be sent to authorities and data subjects after a breach?
+  expect: [GDPR_Sample:7.2, HIPAA_Sample:9.2]
+- q: How are personal data breaches triaged and documented?
+  expect: [GDPR_Sample:7.1]
+- q: What is required before transferring personal data outside the EEA?
+  expect: [GDPR_Sample:8.1]
+- q: When must a DPIA be performed?
+  expect: [GDPR_Sample:5.1]
+- q: When are supervisory authorities consulted about residual risk?
+  expect: [GDPR_Sample:5.2]
+- q: What must processor agreements address?
+  expect: [GDPR_Sample:9.1]
+- q: How are sub-processor changes handled?
+  expect: [GDPR_Sample:9.2]
+- q: What do ROPA entries list?
+  expect: [GDPR_Sample:12.1]
+- q: How often do personnel receive privacy training?
+  expect: [GDPR_Sample:13.1]
+- q: Is identity verified before fulfilling data subject requests?
+  expect: [GDPR_Sample:3.2]
+- q: What does a legitimate interests balancing test require?
+  expect: [GDPR_Sample:2.2]
+- q: What does GDPR section 10.2 say about expired records?
+  expect: [GDPR_Sample:10.2]
+- q: How is parental consent handled for children's data?
+  expect: [GDPR_Sample:11.1]
+- q: What is the minimum necessary standard for PHI?
+  expect: [HIPAA_Sample:2.1]
+- q: What must business associate arrangements include?
+  expect: [HIPAA_Sample:8.1]
+- q: How are potential HIPAA breaches assessed?
+  expect: [HIPAA_Sample:9.1]
+- q: How long are HIPAA policies and records retained?
+  expect: [HIPAA_Sample:10.1]
+- q: Is encryption required for ePHI?
+  expect: [HIPAA_Sample:7.2]
+- q: How is media disposed of under the HIPAA policy?
+  expect: [HIPAA_Sample:6.2]
+- q: Who may access Customer Proprietary Network Information?
+  expect: [FCC_Telecom:2.1]
+- q: How are robocalls and caller ID spoofing mitigated?
+  expect: [FCC_Telecom:6.1]
+- q: How are requests from law enforcement handled?
+  expect: [FCC_Telecom:7.1, FCC_Telecom:7.2]
+- q: What happens after a telecom security incident?
+  expect: [FCC_Telecom:8.2]
+- q: How are AI datasets checked for fairness?
+  expect: [AI_Ethical_Use:2.1]
+- q: Are override and shutdown procedures required for AI systems?
+  expect: [AI_Ethical_Use:7.2]
+- q: How are third-party AI models evaluated?
+  expect: [AI_Ethical_Use:9.2]
+- q: What documentation is maintained across the AI lifecycle?
+  expect: [AI_Ethical_Use:10.1]
+- q: Tell me about Taylor Swift's dating history.
+  expect: []
+- q: What fine does Article 83 set for breaches?
+  expect: []
+- q: What is the office wifi password?
+  expect: []
+- q: Who won the 2026 World Cup?
+  expect: []
+- q: What is the recipe for chocolate cake?
+  expect: []
+- q: What is our company's stock price?
+  expect: []

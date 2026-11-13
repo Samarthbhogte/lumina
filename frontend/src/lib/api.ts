@@ -9,6 +9,11 @@ export interface Source {
   page: number
   snippet: string
   score: number
+  page_end?: number | null
+  section?: string | null
+  heading?: string | null
+  clause?: string | null // set when the answer shows which clause it relied on
+  label: string // e.g. "GDPR Sample Compliance §7.2, p.1"
 }
 
 export interface AskResult {

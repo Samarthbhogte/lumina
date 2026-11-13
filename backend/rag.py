@@ -8,12 +8,13 @@ point share the same retrieval and prompt.
 import html
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable
 from starlette.concurrency import run_in_threadpool
 
+from backend.citations import best_clause, citing_sentences, clause_label, section_label
 from backend.config import Settings
 from backend.guard import looks_like_injection
 from backend.schemas import AskRequest, AskResponse, ChatMessage, Confidence, Source
@@ -51,6 +52,7 @@ _CITATION = re.compile(r"\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]")
 class Prepared:
     sources: list[Source]
     messages: list[BaseMessage] | None  # None means: answer without calling the model
+    hits: dict[int, SearchHit] = field(default_factory=dict)  # source number -> full retrieved chunk
     fixed_answer: str | None = None
     flagged: bool = False
 
@@ -62,29 +64,37 @@ def _history_messages(history: list[ChatMessage], limit: int) -> list[BaseMessag
     return [HumanMessage(m.content[:4000]) if m.role == "user" else AIMessage(m.content[:4000]) for m in recent]
 
 
-def _format_sources(hits: list[SearchHit], max_chars: int) -> tuple[list[Source], str]:
+def _format_sources(hits: list[SearchHit], max_chars: int) -> tuple[list[Source], str, dict[int, SearchHit]]:
     sources: list[Source] = []
+    used_hits: dict[int, SearchHit] = {}
     blocks: list[str] = []
     used = 0
     for n, hit in enumerate(hits, start=1):
         if used + len(hit.text) > max_chars and blocks:
             break
         used += len(hit.text)
+        used_hits[n] = hit
         sources.append(
             Source(
                 n=n,
                 document_id=hit.document_id,
                 filename=hit.filename,
                 page=hit.page,
-                snippet=hit.text[:400],
+                page_end=hit.page_end,
+                section=hit.section,
+                heading=hit.heading,
+                snippet=hit.text[:1200],
                 score=round(hit.score, 3),
+                label=section_label(hit.filename, hit.page, hit.page_end, hit.section),
             )
         )
         # Escape markup so document text can't close the <source> tag and pose as instructions.
-        name = html.escape(hit.filename, quote=True)
-        body = html.escape(hit.text, quote=False)
-        blocks.append(f'<source n="{n}" file="{name}" page="{hit.page}">\n{body}\n</source>')
-    return sources, "\n\n".join(blocks)
+        attrs = f'n="{n}" file="{html.escape(hit.filename, quote=True)}"'
+        if hit.section:
+            attrs += f' section="{hit.section}" heading="{html.escape(hit.heading or "", quote=True)}"'
+        pages = f"{hit.page}" if not hit.page_end or hit.page_end == hit.page else f"{hit.page}-{hit.page_end}"
+        blocks.append(f'<source {attrs} pages="{pages}">\n{html.escape(hit.text, quote=False)}\n</source>')
+    return sources, "\n\n".join(blocks), used_hits
 
 
 def _normalise(text: str) -> str:
@@ -150,13 +160,13 @@ class RagService:
         if not hits:
             return Prepared(sources=[], messages=None, fixed_answer=NOT_FOUND)
 
-        sources, context = _format_sources(hits, self.settings.max_context_chars)
+        sources, context, used_hits = _format_sources(hits, self.settings.max_context_chars)
         messages = [
             SystemMessage(f"{SYSTEM_PROMPT}\n\nSources:\n{context}"),
             *_history_messages(req.history, self.settings.max_history_messages),
             HumanMessage(req.question),
         ]
-        return Prepared(sources=sources, messages=messages)
+        return Prepared(sources=sources, messages=messages, hits=used_hits)
 
     def finish(self, prepared: Prepared, answer: str) -> AskResponse:
         cited = cited_numbers(answer, prepared.sources)
@@ -167,12 +177,27 @@ class RagService:
             found = False
         return AskResponse(
             answer=answer,
-            sources=prepared.sources,
+            sources=self._label_clauses(prepared, answer, cited),
             cited=cited,
             confidence=confidence,
             found=found,
             flagged=prepared.flagged,
         )
+
+    @staticmethod
+    def _label_clauses(prepared: Prepared, answer: str, cited: list[int]) -> list[Source]:
+        """Narrow cited sources from "§7" to the clause the answer relied on, e.g. "§7.2, p.1"."""
+        out = []
+        for source in prepared.sources:
+            hit = prepared.hits.get(source.n)
+            if source.n in cited and hit and hit.clauses:
+                clause = best_clause(hit.text, citing_sentences(answer, source.n), hit.clauses)
+                if clause:
+                    source = source.model_copy(
+                        update={"clause": clause, "label": clause_label(hit.filename, clause, hit.clauses[clause])}
+                    )
+            out.append(source)
+        return out
 
     async def answer(self, req: AskRequest, flagged: bool = False) -> AskResponse:
         prepared = await self.prepare(req, flagged)

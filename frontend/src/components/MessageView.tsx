@@ -45,7 +45,7 @@ function AssistantView({ message, activeSource, canRetry, onCite, onRetry }: Pro
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  const valid = useMemo(() => new Set(message.sources.map((s) => s.n)), [message.sources])
+  const valid = useMemo(() => new Map(message.sources.map((s) => [s.n, s.label])), [message.sources])
   const cited = useMemo(() => new Set(message.result?.cited ?? []), [message.result])
   const cite = useCallback((n: number) => onCite(message.id, n), [onCite, message.id])
   const streaming = message.status === 'streaming'
