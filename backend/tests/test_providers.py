@@ -7,6 +7,7 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_google_genai._common import GoogleGenerativeAIError
 
+from backend.chunking import CHUNKER_VERSION
 from backend.config import Settings
 from backend.pdf import Page
 from backend.providers import UnitEmbeddings, build_models, classify
@@ -86,7 +87,9 @@ def test_switching_embedding_model_reindexes(tmp_path):
     assert switched._index.index.d == 48
     import json
 
-    assert json.loads((tmp_path / "documents.json").read_text())["embedding_id"] == "gemini:emb#chunker3"
+    assert (
+        json.loads((tmp_path / "documents.json").read_text())["embedding_id"] == f"gemini:emb#chunker{CHUNKER_VERSION}"
+    )
 
 
 def test_gemini_auth_error_maps_to_502(tmp_path):

@@ -11,6 +11,7 @@ from langchain_core.runnables import Runnable
 
 from backend.account_api import router as account_router
 from backend.api import router
+from backend.compare_api import router as compare_router
 from backend.config import Settings, get_settings
 from backend.db import make_engine, make_sessionmaker
 from backend.providers import PROVIDER_ERRORS, build_models, classify, rate_limit_message
@@ -144,6 +145,7 @@ def create_app(
 
     app.include_router(account_router)
     app.include_router(router)
+    app.include_router(compare_router)
     # Outermost, so the size cap and headers also apply to CORS and error responses.
     app.add_middleware(_Guard, max_body=settings.max_request_bytes)
 

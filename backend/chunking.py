@@ -27,7 +27,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.pdf import Page
 
-CHUNKER_VERSION = 3  # bump to re-index stored documents when chunking changes
+CHUNKER_VERSION = 4  # bump to re-index stored documents when chunking changes
 MIN_HEADINGS = 3
 
 _HEADING = re.compile(r"^(\d{1,2})\.\s+([A-Z][^\n]{1,80})$")
@@ -47,6 +47,7 @@ class Chunk:
 class _Line:
     text: str
     page: int
+    ocr: bool = False
 
 
 @dataclass
@@ -65,7 +66,9 @@ def document_title(pages: list[Page], fallback: str) -> str:
 
 
 def _lines(pages: list[Page]) -> list[_Line]:
-    lines = [_Line(line.strip(), page.number) for page in pages for line in page.text.splitlines() if line.strip()]
+    lines = [
+        _Line(line.strip(), page.number, page.ocr) for page in pages for line in page.text.splitlines() if line.strip()
+    ]
     if len(pages) < 3:
         return lines
     # Running headers/footers: the same short line on more than half of the pages.
@@ -166,7 +169,7 @@ def chunk_document(
             Chunk(
                 text=text,
                 search_text=f"{title}\n{text}",
-                metadata={**base, "page": page.number, "page_end": page.number},
+                metadata={**base, "page": page.number, "page_end": page.number, "ocr": page.ocr},
             )
             for page in pages
             for text in splitter.split_text(page.text)
@@ -205,6 +208,7 @@ def chunk_document(
                             "section": section.number,
                             "heading": section.heading,
                             "clauses": piece_clauses,
+                            "ocr": any(line.ocr for line in group),
                         },
                     )
                 )

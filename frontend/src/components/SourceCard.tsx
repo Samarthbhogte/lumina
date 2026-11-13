@@ -55,6 +55,11 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
           </p>
           <p className="truncate text-xs text-muted">
             {source.heading ?? `Page ${source.page}`}
+            {source.ocr && (
+              <span title="Read from a scanned page by OCR: check the wording against the page itself" className="ml-1.5 rounded bg-warn-soft px-1 py-px text-[10px] font-medium text-warn">
+                OCR text
+              </span>
+            )}
             {!cited && ' · retrieved, not cited'}
           </p>
         </div>

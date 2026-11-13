@@ -31,6 +31,8 @@ def seconds_until_reset() -> int:
 
 def _take(db: Session, scope: str, limit: int) -> bool:
     """Atomically count one use if under the limit. True when it was counted."""
+    if limit <= 0:  # the first use inserts a row with count=1, so a zero limit must be checked here
+        return False
     stmt = insert(Usage).values(scope=scope, window=_day(), kind=KIND, count=1)
     stmt = stmt.on_conflict_do_update(
         index_elements=["scope", "window", "kind"],

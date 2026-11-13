@@ -56,6 +56,7 @@ def answer_entry(question: str, payload: dict) -> dict:
                 "clause": s.get("clause"),
                 "similarity": s["score"],
                 "excerpt": excerpts.get(str(s["n"])) or s.get("snippet", ""),
+                "ocr": bool(s.get("ocr")),
                 "document_sha256": doc.get("sha256"),
                 "document_uploaded_at": doc.get("uploaded_at"),
             }
@@ -127,7 +128,7 @@ def _html(record: dict, sha: str) -> str:
         "<table>",
         f"<tr><td class='muted'>Workspace</td><td>{_e(ws['name'])} ({_e(ws['id'])})</td></tr>",
         f"<tr><td class='muted'>Exported by</td><td>{_e(by['display_name'])} &lt;{_e(by['email'])}&gt;</td></tr>",
-        f"<tr><td class='muted'>Exported at (UTC)</td><td>{_e(record['exported_at'].replace("+00:00", "Z"))}</td></tr>",
+        f"<tr><td class='muted'>Exported at (UTC)</td><td>{_e(record['exported_at'].replace('+00:00', 'Z'))}</td></tr>",
         f"<tr><td class='muted'>Answers</td><td>{len(record['answers'])}</td></tr>",
         f"<tr><td class='muted'>Integrity (SHA-256)</td><td class='small'>{_e(sha)}</td></tr>",
         "</table>",
@@ -159,8 +160,9 @@ def _html(record: dict, sha: str) -> str:
                 f"· uploaded {_e(s['document_uploaded_at'])}"
             )
             excerpt = "<br/>".join(_e(line) for line in s["excerpt"].splitlines())
+            ocr_note = " <i>(OCR text: verify against the page image)</i>" if s.get("ocr") else ""
             parts += [
-                f"<p><b>[{s['n']}] {_e(s['label'])}</b> <span class='muted small'>· {meta}</span></p>",
+                f"<p><b>[{s['n']}] {_e(s['label'])}</b>{ocr_note} <span class='muted small'>· {meta}</span></p>",
                 f"<p class='excerpt'>{excerpt}</p>",
             ]
         if other:

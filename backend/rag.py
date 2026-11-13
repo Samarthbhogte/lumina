@@ -88,6 +88,7 @@ def _format_sources(hits: list[SearchHit], max_chars: int) -> tuple[list[Source]
                 snippet=hit.text[:1200],
                 score=round(hit.score, 3),
                 label=section_label(hit.filename, hit.page, hit.page_end, hit.section),
+                ocr=hit.ocr,
             )
         )
         # Escape markup so document text can't close the <source> tag and pose as instructions.
@@ -126,7 +127,7 @@ def assess(
     if not found or not cited:
         return found, "low"
     best = max(s.score for s in sources if s.n in cited)
-    if best >= high:
+    if best >= high and not any(s.ocr for s in sources if s.n in cited):  # OCR text: never "strong"
         return found, "high"
     if best >= medium:
         return found, "medium"

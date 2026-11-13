@@ -139,7 +139,9 @@ async def upload_documents(
                 )
                 continue
             try:
-                pages = await run_in_threadpool(extract_pages, data, settings.max_pages)
+                pages = await run_in_threadpool(
+                    extract_pages, data, settings.max_pages, settings.ocr != "off", settings.max_ocr_pages
+                )
                 record, created = await run_in_threadpool(store.add, name, data, pages)
             except (PDFError, DocumentTooLarge) as exc:
                 results.append(UploadResult(filename=name, status="failed", error=str(exc)))

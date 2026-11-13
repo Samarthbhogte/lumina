@@ -1,6 +1,6 @@
 'use client'
 
-import { FileDown, Menu, SquarePen, Upload } from 'lucide-react'
+import { FileDown, ListChecks, Menu, SquarePen, Upload } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -26,6 +26,7 @@ import {
 
 import { AccountMenu } from './AccountMenu'
 import { ConversationList } from './ConversationList'
+import { GapCheckDialog } from './GapCheckDialog'
 import { MembersDialog } from './MembersDialog'
 import { WorkspaceIdContext } from './WorkspaceContext'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -79,6 +80,7 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [membersOpen, setMembersOpen] = useState(false)
+  const [gapOpen, setGapOpen] = useState(false)
   const [documents, setDocuments] = useState<DocumentInfo[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
@@ -412,28 +414,38 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
               <span className="lg:hidden">Lumina · </span>Compliance assistant
             </h1>
           </div>
-          {messages.length > 0 && (
-            <div className="flex items-center gap-1">
-              {conversationId && !busy && (
+          <div className="flex items-center gap-1">
+            {(documents?.length ?? 0) >= 2 && !aiOff && (
+              <button
+                type="button"
+                onClick={() => setGapOpen(true)}
+                title="Check which requirements of one document another addresses"
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink"
+              >
+                <ListChecks size={15} aria-hidden /> <span className="hidden sm:inline">Gap check</span>
+              </button>
+            )}
+            {messages.length > 0 && conversationId && !busy && (
                 <a
                   href={conversationExportUrl(workspaceId, conversationId)}
                   download
                   title="Download every answer in this chat as an audit-ready PDF"
                   className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink"
                 >
-                  <FileDown size={15} aria-hidden /> Export chat
+                  <FileDown size={15} aria-hidden /> <span className="hidden sm:inline">Export chat</span>
                 </a>
-              )}
+            )}
+            {messages.length > 0 && (
               <button
                 type="button"
                 disabled={busy}
                 onClick={newChat}
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
               >
-                <SquarePen size={15} aria-hidden /> New chat
+                <SquarePen size={15} aria-hidden /> <span className="hidden sm:inline">New chat</span>
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </header>
 
         <div
@@ -549,6 +561,15 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
     </div>
     {workspace?.role === 'owner' && workspace.kind === 'team' && (
       <MembersDialog workspaceId={workspaceId} open={membersOpen} onClose={() => setMembersOpen(false)} />
+    )}
+    {documents && documents.length >= 2 && (
+      <GapCheckDialog
+        workspaceId={workspaceId}
+        documents={documents}
+        open={gapOpen}
+        onClose={() => setGapOpen(false)}
+        onUsedQuota={() => void refresh()}
+      />
     )}
     </WorkspaceIdContext.Provider>
   )

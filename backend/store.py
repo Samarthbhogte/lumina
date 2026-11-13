@@ -70,6 +70,7 @@ class SearchHit:
     section: str | None = None
     heading: str | None = None
     clauses: dict | None = None  # clause id -> [first page, last page]
+    ocr: bool = False  # passage text came from OCR
 
 
 @dataclass
@@ -223,6 +224,15 @@ class DocumentStore:
         with self._lock:
             return sum(d.chunks for d in self._docs.values())
 
+    def chunks_of(self, document_id: str) -> list:
+        """The stored chunks (LangChain Documents) of one document, in index order."""
+        with self._lock:
+            record = self._docs.get(document_id)
+            if record is None or self._index is None:
+                return []
+            store = self._index.docstore
+            return [doc for cid in record.chunk_ids if (doc := store.search(cid)) and not isinstance(doc, str)]
+
     def find_by_hash(self, sha256: str) -> DocumentRecord | None:
         with self._lock:
             return next((d for d in self._docs.values() if d.sha256 == sha256), None)
@@ -320,6 +330,7 @@ class DocumentStore:
                         section=md.get("section"),
                         heading=md.get("heading"),
                         clauses=md.get("clauses") or None,
+                        ocr=bool(md.get("ocr")),
                     )
                 )
                 if len(hits) >= k:

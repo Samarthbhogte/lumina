@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     daily_questions_per_user: int = 25
     daily_questions_total: int = 55
     max_open_stores: int = 8
+    # Read scanned pages with Tesseract OCR when it is installed ("off" to disable).
+    ocr: Literal["auto", "off"] = "auto"
+    max_ocr_pages: int = 50
 
     @field_validator("cors_origins")
     @classmethod

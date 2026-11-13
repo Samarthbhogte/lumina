@@ -146,6 +146,23 @@ class Usage(Base):
     count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class Comparison(Base):
+    """A gap check of a requirements document against a policy, saved batch by batch."""
+
+    __tablename__ = "comparisons"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    requirements_document_id: Mapped[str] = mapped_column(String(32))
+    policy_document_id: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | partial | done
+    rows: Mapped[dict | None] = mapped_column(JSON)  # {"rows": [...], "total": N}
+    note: Mapped[str | None] = mapped_column(Text)  # why a run stopped early
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

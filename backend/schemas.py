@@ -41,6 +41,7 @@ class Source(BaseModel):
     heading: str | None = None
     clause: str | None = None  # set once the answer shows which clause was relied on
     label: str = ""  # e.g. "GDPR Sample Compliance §7.2, p.1"
+    ocr: bool = False  # passage text came from OCR of a scanned page: verify against the page image
 
 
 class AskResponse(BaseModel):

@@ -14,6 +14,7 @@ export interface Source {
   heading?: string | null
   clause?: string | null // set when the answer shows which clause it relied on
   label: string // e.g. "GDPR Sample Compliance §7.2, p.1"
+  ocr?: boolean // text came from OCR of a scanned page
 }
 
 export interface AskResult {
@@ -269,3 +270,43 @@ export async function askStream(
   }
   if (!finished) throw new ApiError('The answer was cut off. Please try again.', 0)
 }
+
+// ---------- gap check ----------
+
+export type GapStatus = 'addressed' | 'partial' | 'not_found' | 'needs_review'
+
+export interface GapRow {
+  requirement: { id: string; text: string; page: number; section: string | null }
+  status: GapStatus
+  match: { label: string; page: number; document_id: string; score: number; excerpt: string } | null
+  quote: string
+  rationale: string
+}
+
+export interface Comparison {
+  id: string
+  title: string
+  status: 'running' | 'partial' | 'done'
+  note: string | null
+  created_at: string
+  rows?: GapRow[]
+  summary: (Record<GapStatus, number> & { total: number; headline: string }) | null
+  total_requirements: number
+}
+
+export interface ComparePair {
+  requirements_document_id: string
+  policy_document_id: string
+}
+
+export const estimateComparison = (ws: string, pair: ComparePair) =>
+  request<{ requirements: number; max_ai_requests: number; questions_left_today: number }>(
+    `/workspaces/${ws}/comparisons/estimate`,
+    json('POST', pair),
+  )
+export const runComparison = (ws: string, pair: ComparePair) =>
+  request<Comparison>(`/workspaces/${ws}/comparisons`, json('POST', pair))
+export const resumeComparison = (ws: string, id: string) =>
+  request<Comparison>(`/workspaces/${ws}/comparisons/${id}/resume`, { method: 'POST' })
+export const listComparisons = (ws: string) => request<Comparison[]>(`/workspaces/${ws}/comparisons`)
+export const getComparison = (ws: string, id: string) => request<Comparison>(`/workspaces/${ws}/comparisons/${id}`)
