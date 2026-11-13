@@ -82,8 +82,9 @@ backend/.venv/bin/python -m backend.scripts.ingest_folder samples --email you@ex
 **No key? Use demo mode.** `backend/.venv/bin/uvicorn backend.devserver:app --port 8000` runs
 the real API with fake embeddings and a scripted model, free and offline.
 
-**Docker:** `docker compose up --build`. This includes Tesseract, reads `backend/.env`, and
-keeps data in a named volume.
+**Docker:** `docker compose up --build` (or `LUMINA_WEB_PORT=3100 docker compose up --build`
+if port 3000 is taken), then open the web port. This includes Tesseract, reads `backend/.env`,
+keeps data in a named volume, and doesn't publish the API, so only the web app is reachable.
 
 ## Tests and evals
 
@@ -135,6 +136,11 @@ The browser only talks to Next.js, which proxies `/api/*` to FastAPI. Set the ta
 
 ## Limits
 
+- **Put a reverse proxy in front for real deployments.** Next.js's `/api` proxy doesn't pass
+  the browser's IP on, so in Docker every request reaches the API from the web container.
+  Per-IP login throttling then treats all users as one. Caddy or nginx in front of the web
+  container, setting `X-Forwarded-For` and handling HTTPS, fixes this, and the API already
+  trusts that header from the compose network.
 - **Self-hosted, small teams.** There's no email: invite and password-reset links are
   copied by hand. There's no SSO or billing. Run one uvicorn worker, because one process
   owns `data/`.

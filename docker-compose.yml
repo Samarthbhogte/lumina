@@ -6,8 +6,8 @@ services:
       dockerfile: backend/Dockerfile
     env_file: backend/.env
     environment:
-      LUMINA_CORS_ORIGINS: http://localhost:3000
-      LUMINA_TRUSTED_ORIGINS: http://localhost:3000
+      LUMINA_CORS_ORIGINS: http://localhost:${LUMINA_WEB_PORT:-3000}
+      LUMINA_TRUSTED_ORIGINS: http://localhost:${LUMINA_WEB_PORT:-3000}
       FORWARDED_ALLOW_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"  # the compose network
       # Set true when serving over HTTPS.
       LUMINA_COOKIE_SECURE: "false"
@@ -25,7 +25,7 @@ services:
       args:
         LUMINA_API_INTERNAL_URL: http://api:8000
     ports:
-      - "3000:3000"
+      - "${LUMINA_WEB_PORT:-3000}:3000"  # LUMINA_WEB_PORT=3100 docker compose up if 3000 is taken
     depends_on:
       - api
     restart: unless-stopped
