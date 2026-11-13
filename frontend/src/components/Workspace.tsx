@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, SquarePen, Upload } from 'lucide-react'
+import { FileDown, Menu, SquarePen, Upload } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import {
   ApiError,
   askStream,
+  conversationExportUrl,
   deleteConversation,
   deleteDocument,
   getConversation,
@@ -412,14 +413,26 @@ export default function Workspace({ workspaceId }: { workspaceId: string }) {
             </h1>
           </div>
           {messages.length > 0 && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={newChat}
-              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
-            >
-              <SquarePen size={15} aria-hidden /> New chat
-            </button>
+            <div className="flex items-center gap-1">
+              {conversationId && !busy && (
+                <a
+                  href={conversationExportUrl(workspaceId, conversationId)}
+                  download
+                  title="Download every answer in this chat as an audit-ready PDF"
+                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink"
+                >
+                  <FileDown size={15} aria-hidden /> Export chat
+                </a>
+              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={newChat}
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+              >
+                <SquarePen size={15} aria-hidden /> New chat
+              </button>
+            </div>
           )}
         </header>
 

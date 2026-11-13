@@ -1,12 +1,15 @@
 'use client'
 
-import { Check, ChevronDown, Copy, RotateCcw, TriangleAlert } from 'lucide-react'
+import { Check, ChevronDown, Copy, FileDown, RotateCcw, TriangleAlert } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import { answerExportUrl } from '@/lib/api'
 
 import { AnswerMarkdown } from './AnswerMarkdown'
 import { ConfidenceBadge } from './ConfidenceBadge'
 import { SourceCard } from './SourceCard'
 import type { AssistantMessage, Message } from './types'
+import { useWorkspaceId } from './WorkspaceContext'
 
 interface Props {
   message: Message
@@ -40,6 +43,7 @@ function MessageViewImpl({ message, activeSource, canRetry, onCite, onRetry }: P
 export const MessageView = memo(MessageViewImpl)
 
 function AssistantView({ message, activeSource, canRetry, onCite, onRetry }: Props & { message: AssistantMessage }) {
+  const ws = useWorkspaceId()
   const [copied, setCopied] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -124,6 +128,16 @@ function AssistantView({ message, activeSource, canRetry, onCite, onRetry }: Pro
             {copied ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
             <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
           </button>
+          {message.result.message_id && (
+            <a
+              href={answerExportUrl(ws, message.result.message_id)}
+              download
+              title="Download this answer with its cited passages as an audit-ready PDF"
+              className="inline-flex min-h-6 items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+            >
+              <FileDown size={13} aria-hidden /> Evidence PDF
+            </a>
+          )}
         </div>
       )}
 

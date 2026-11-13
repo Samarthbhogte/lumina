@@ -6,6 +6,7 @@ get 404, so other workspaces' existence and documents are never revealed.
 
 import json
 import logging
+import re
 from contextlib import aclosing
 from pathlib import Path
 
@@ -16,11 +17,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from backend import quota
+from backend import __version__, evidence, quota
 from backend.account_api import require_role
 from backend.auth import audit, csrf_protect, current_user, get_db
 from backend.config import Settings
-from backend.db import Conversation, Message, User, Workspace, now
+from backend.db import AuditEvent, Conversation, Message, User, Workspace, now
 from backend.guard import looks_like_injection
 from backend.pdf import PDFError, extract_pages
 from backend.providers import classify, rate_limit_message
@@ -330,6 +331,9 @@ def _record(
         "document_filter": req.document_ids,
         "asked_by": user.id,
         "workspace_id": ws.id,
+        "answered_at": now().isoformat(timespec="seconds") + "Z",
+        # Full passage text (not the UI snippet), so evidence exports quote exactly what was used.
+        "excerpts": {str(n): hit.text for n, hit in prepared.hits.items()},
     }
     db.commit()
     return final
@@ -453,3 +457,113 @@ async def ask_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------- evidence & audit trail ----------
+
+
+def _pdf(data: bytes, name: str) -> Response:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name)[:80].strip("-") or "evidence"
+    return Response(
+        data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe}.pdf"', "Cache-Control": "no-store"},
+    )
+
+
+def _export(db: Session, request: Request, user: User, ws: Workspace, conv: Conversation, messages: list[Message]):
+    answers, question = [], ""
+    for m in messages:
+        if m.role == "user":
+            question = m.content
+        elif m.payload and "response" in m.payload:
+            answers.append(evidence.answer_entry(question, m.payload))
+    if not answers:
+        raise HTTPException(status_code=404, detail="No recorded answers to export.")
+    record = evidence.build_record(
+        workspace={"id": ws.id, "name": ws.name},
+        exported_by={"id": user.id, "email": user.email, "display_name": user.display_name},
+        conversation={"id": conv.id, "title": conv.title},
+        answers=answers,
+        app_version=__version__,
+    )
+    data = evidence.render_pdf(record)
+    audit(
+        db,
+        "evidence.exported",
+        request,
+        user,
+        ws.id,
+        conversation_id=conv.id,
+        answers=[a["message_id"] for a in answers],
+        sha256=evidence.digest(record),
+    )
+    db.commit()
+    return _pdf(data, f"lumina-evidence-{conv.title}")
+
+
+@router.get("/workspaces/{workspace_id}/answers/{message_id}/export")
+def export_answer(
+    request: Request,
+    workspace_id: str = HexId(),
+    message_id: str = HexId(),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """One recorded answer (with the question that prompted it) as an evidence pack."""
+    ws = require_role(db, user, workspace_id, "viewer")
+    answer = db.get(Message, message_id)
+    if answer is None or answer.role != "assistant":
+        raise HTTPException(status_code=404, detail="Answer not found.")
+    conv = _own_conversation(db, workspace_id, user, answer.conversation_id)
+    question = db.scalars(
+        select(Message)
+        .where(Message.conversation_id == conv.id, Message.role == "user", Message.created_at <= answer.created_at)
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    ).first()
+    return _export(db, request, user, ws, conv, [m for m in (question, answer) if m is not None])
+
+
+@router.get("/workspaces/{workspace_id}/conversations/{conversation_id}/export")
+def export_conversation(
+    request: Request,
+    workspace_id: str = HexId(),
+    conversation_id: str = HexId(),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    ws = require_role(db, user, workspace_id, "viewer")
+    conv = _own_conversation(db, workspace_id, user, conversation_id)
+    messages = list(db.scalars(select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at)))
+    return _export(db, request, user, ws, conv, messages)
+
+
+@router.get("/workspaces/{workspace_id}/documents/history")
+def document_history(
+    workspace_id: str = HexId(), user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[dict]:
+    """Who added or removed which document version, and when: "which version was in force on date D"."""
+    require_role(db, user, workspace_id, "viewer")
+    rows = db.execute(
+        select(AuditEvent, User.display_name)
+        .outerjoin(User, User.id == AuditEvent.actor_id)
+        .where(AuditEvent.workspace_id == workspace_id, AuditEvent.event.in_(["document.uploaded", "document.deleted"]))
+        .order_by(AuditEvent.ts.desc())
+        .limit(500)
+    ).all()
+    return [{"at": _iso(e.ts), "event": e.event.split(".")[1], "by": name, **(e.detail or {})} for e, name in rows]
+
+
+@router.post("/evidence/verify")
+async def verify_evidence(file: UploadFile = File(...), user: User = Depends(current_user)) -> dict:
+    data = await file.read(25 * 1024 * 1024 + 1)
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File is too large.")
+    valid, message, record = await run_in_threadpool(evidence.verify_pack, data)
+    return {
+        "valid": valid,
+        "message": message,
+        "exported_at": record.get("exported_at") if record else None,
+        "answers": len(record.get("answers", [])) if record else 0,
+    }

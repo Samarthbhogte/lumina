@@ -184,6 +184,11 @@ export function uploadDocuments(ws: string, files: File[]) {
   return request<{ results: UploadResult[] }>(`/workspaces/${ws}/documents`, { method: 'POST', body: form })
 }
 
+// Evidence packs: a PDF of recorded answers with an integrity hash (downloads, cookie-authenticated).
+export const answerExportUrl = (ws: string, messageId: string) => `${API}/workspaces/${ws}/answers/${messageId}/export`
+export const conversationExportUrl = (ws: string, conversationId: string) =>
+  `${API}/workspaces/${ws}/conversations/${conversationId}/export`
+
 export const documentFileUrl = (ws: string, id: string, page?: number) =>
   `${API}/workspaces/${ws}/documents/${id}/file${page ? `#page=${page}` : ''}`
 
