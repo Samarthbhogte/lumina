@@ -6,6 +6,8 @@ import { forwardRef } from 'react'
 import { documentFileUrl, type Source } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
+import { useWorkspaceId } from './WorkspaceContext'
+
 interface Props {
   source: Source
   cited: boolean
@@ -17,6 +19,7 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
   { source, cited, active, onSelect },
   ref,
 ) {
+  const ws = useWorkspaceId()
   // "GDPR Sample Compliance §7.2, pp.1–2" -> name "GDPR Sample Compliance", where "§7.2, pp.1–2".
   const label = source.label || `${source.filename}, p.${source.page}`
   const split = label.search(/ §|, pp?\./)
@@ -56,7 +59,7 @@ export const SourceCard = forwardRef<HTMLLIElement, Props>(function SourceCard(
           </p>
         </div>
         <a
-          href={documentFileUrl(source.document_id, source.page)}
+          href={documentFileUrl(ws, source.document_id, source.page)}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex min-h-6 shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted hover:bg-surface-2 hover:text-ink"

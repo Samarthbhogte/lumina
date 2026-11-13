@@ -23,6 +23,9 @@ export interface AskResult {
   confidence: Confidence
   found: boolean
   flagged: boolean
+  model?: string | null
+  conversation_id?: string | null
+  message_id?: string | null
 }
 
 export interface DocumentInfo {
@@ -46,18 +49,58 @@ export interface Health {
   ai_configured: boolean
   provider: string
   chat_model: string
-  documents: number
-  chunks: number
+  needs_setup: boolean
 }
 
-export interface HistoryMessage {
+export type Role = 'viewer' | 'editor' | 'owner'
+
+export interface WorkspaceInfo {
+  id: string
+  name: string
+  kind: 'personal' | 'team'
+  role: Role
+}
+
+export interface Me {
+  user: { id: string; email: string; display_name: string; is_admin: boolean }
+  workspaces: WorkspaceInfo[]
+  questions_used_today: number
+  questions_per_day: number
+}
+
+export interface Conversation {
+  id: string
+  title: string
+  updated_at: string
+}
+
+export interface StoredMessage {
+  id: string
   role: 'user' | 'assistant'
   content: string
+  result: AskResult | null
+  created_at: string
 }
 
-// Same-origin: Next.js proxies /api/* to FastAPI (see next.config.ts), so session cookies
-// reach every request and no CORS is needed.
+export interface Member {
+  user_id: string
+  email: string
+  display_name: string
+  role: Role
+}
+
+export interface Invite {
+  id: string
+  role: Role
+  email: string | null
+  expires_at: string
+  link?: string | null
+}
+
+// Same-origin: Next.js proxies /api/* to FastAPI (see next.config.ts), so the session cookie
+// reaches every request (including streams and PDF links) and no CORS is needed.
 const API = '/api'
+const UNREACHABLE = "Can't reach the Lumina API. Is the backend running?"
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -77,32 +120,78 @@ async function errorFrom(res: Response): Promise<ApiError> {
   return new ApiError(message.replace(/^Value error, /, ''), res.status)
 }
 
+// State-changing requests carry a custom header the server requires (a CSRF defence:
+// cross-site forms can't set it).
+function withCsrf(init?: RequestInit): RequestInit {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  if (method === 'GET' || method === 'HEAD') return init ?? {}
+  return { ...init, headers: { ...(init?.headers ?? {}), 'X-Lumina-CSRF': '1' } }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`${API}${path}`, init)
+    res = await fetch(`${API}${path}`, withCsrf(init))
   } catch {
-    throw new ApiError("Can't reach the Lumina API. Is the backend running?", 0)
+    throw new ApiError(UNREACHABLE, 0)
   }
   if (!res.ok) throw await errorFrom(res)
   return (res.status === 204 ? undefined : await res.json()) as T
 }
 
+const json = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
+// ---------- accounts ----------
+
 export const getHealth = () => request<Health>('/health')
+export const getMe = () => request<Me>('/auth/me')
+export const signIn = (email: string, password: string) => request<Me>('/auth/login', json('POST', { email, password }))
+export const signUp = (body: { email: string; password: string; display_name: string; invite_token?: string }) =>
+  request<Me>('/auth/signup', json('POST', body))
+export const signOut = () => request<void>('/auth/logout', { method: 'POST' })
+export const resetPassword = (token: string, new_password: string) =>
+  request<void>('/auth/reset', json('POST', { token, new_password }))
+export const previewInvite = (token: string) =>
+  request<{ workspace: string; role: Role; signed_in: boolean }>(`/invites/${token}`)
+export const acceptInvite = (token: string) => request<WorkspaceInfo>(`/invites/${token}/accept`, { method: 'POST' })
 
-export const listDocuments = () => request<DocumentInfo[]>('/documents')
+export const createWorkspace = (name: string) => request<WorkspaceInfo>('/workspaces', json('POST', { name }))
+export const listMembers = (ws: string) => request<Member[]>(`/workspaces/${ws}/members`)
+export const setMemberRole = (ws: string, userId: string, role: Role) =>
+  request<Member>(`/workspaces/${ws}/members/${userId}`, json('PATCH', { role }))
+export const removeMember = (ws: string, userId: string) =>
+  request<void>(`/workspaces/${ws}/members/${userId}`, { method: 'DELETE' })
+export const listInvites = (ws: string) => request<Invite[]>(`/workspaces/${ws}/invites`)
+export const createInvite = (ws: string, role: Role, email?: string) =>
+  request<Invite>(`/workspaces/${ws}/invites`, json('POST', { role, email: email || null }))
+export const revokeInvite = (ws: string, id: string) =>
+  request<void>(`/workspaces/${ws}/invites/${id}`, { method: 'DELETE' })
 
-export const deleteDocument = (id: string) =>
-  request<void>(`/documents/${id}`, { method: 'DELETE' })
+// ---------- workspace content ----------
 
-export function uploadDocuments(files: File[]) {
+export const listDocuments = (ws: string) => request<DocumentInfo[]>(`/workspaces/${ws}/documents`)
+
+export const deleteDocument = (ws: string, id: string) =>
+  request<void>(`/workspaces/${ws}/documents/${id}`, { method: 'DELETE' })
+
+export function uploadDocuments(ws: string, files: File[]) {
   const form = new FormData()
   files.forEach((f) => form.append('files', f))
-  return request<{ results: UploadResult[] }>('/documents', { method: 'POST', body: form })
+  return request<{ results: UploadResult[] }>(`/workspaces/${ws}/documents`, { method: 'POST', body: form })
 }
 
-export const documentFileUrl = (id: string, page?: number) =>
-  `${API}/documents/${id}/file${page ? `#page=${page}` : ''}`
+export const documentFileUrl = (ws: string, id: string, page?: number) =>
+  `${API}/workspaces/${ws}/documents/${id}/file${page ? `#page=${page}` : ''}`
+
+export const listConversations = (ws: string) => request<Conversation[]>(`/workspaces/${ws}/conversations`)
+export const getConversation = (ws: string, id: string) =>
+  request<Conversation & { messages: StoredMessage[] }>(`/workspaces/${ws}/conversations/${id}`)
+export const deleteConversation = (ws: string, id: string) =>
+  request<void>(`/workspaces/${ws}/conversations/${id}`, { method: 'DELETE' })
 
 export interface StreamHandlers {
   onSources: (sources: Source[]) => void
@@ -112,21 +201,22 @@ export interface StreamHandlers {
 
 /** POST a question and read the server-sent event stream until `done`. */
 export async function askStream(
-  body: { question: string; history: HistoryMessage[]; document_ids?: string[] },
+  ws: string,
+  body: { question: string; conversation_id?: string | null; document_ids?: string[] },
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   let res: Response
   try {
-    res = await fetch(`${API}/ask/stream`, {
+    res = await fetch(`${API}/workspaces/${ws}/ask/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Lumina-CSRF': '1' },
       body: JSON.stringify(body),
       signal,
     })
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err
-    throw new ApiError("Can't reach the Lumina API. Is the backend running?", 0)
+    throw new ApiError(UNREACHABLE, 0)
   }
   if (!res.ok || !res.body) throw await errorFrom(res)
 

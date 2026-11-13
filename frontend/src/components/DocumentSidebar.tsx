@@ -7,6 +7,7 @@ import { documentFileUrl, type DocumentInfo, type Health } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 import { ThemeToggle } from './ThemeToggle'
+import { useWorkspaceId } from './WorkspaceContext'
 
 interface Props {
   documents: DocumentInfo[] | null
@@ -20,6 +21,10 @@ interface Props {
   onDelete: (doc: DocumentInfo) => void
   onRetryLoad: () => void
   onClose?: () => void
+  canEdit: boolean // viewers can read and ask, not upload or delete
+  workspaceSlot?: React.ReactNode // workspace switcher, under the brand
+  chatsSlot?: React.ReactNode // conversation list, above the documents
+  footerSlot?: React.ReactNode // account menu
 }
 
 const formatSize = (bytes: number) =>
@@ -33,6 +38,7 @@ export function DocumentSidebar(props: Props) {
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>())
   const idPrefix = useId() // the sidebar renders twice (desktop + drawer), so ids must differ
   const aiOff = health !== null && !health.ai_configured
+  const ws = useWorkspaceId()
 
   const take = (list: FileList | null) => {
     const files = Array.from(list ?? [])
@@ -66,7 +72,9 @@ export function DocumentSidebar(props: Props) {
         )}
       </div>
 
-      <div className="px-4">
+      {props.workspaceSlot}
+
+      <div className="px-4" hidden={!props.canEdit}>
         <button
           type="button"
           disabled={aiOff}
@@ -103,6 +111,8 @@ export function DocumentSidebar(props: Props) {
           }}
         />
       </div>
+
+      {props.chatsSlot}
 
       <div className="mt-5 flex items-baseline justify-between px-5">
         <h2
@@ -217,7 +227,7 @@ export function DocumentSidebar(props: Props) {
                     </label>
                     <div className="flex shrink-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:opacity-100">
                       <a
-                        href={documentFileUrl(doc.id)}
+                        href={documentFileUrl(ws, doc.id)}
                         target="_blank"
                         rel="noopener noreferrer"
                         aria-label={`Open ${doc.filename}`}
@@ -225,18 +235,20 @@ export function DocumentSidebar(props: Props) {
                       >
                         <ExternalLink size={13} aria-hidden />
                       </a>
-                      <button
-                        type="button"
-                        ref={(el) => {
-                          if (el) deleteButtons.current.set(doc.id, el)
-                          else deleteButtons.current.delete(doc.id)
-                        }}
-                        onClick={() => setConfirming(doc.id)}
-                        aria-label={`Delete ${doc.filename}`}
-                        className="grid h-7 w-7 place-items-center rounded text-muted hover:bg-surface hover:text-bad"
-                      >
-                        <Trash2 size={13} aria-hidden />
-                      </button>
+                      {props.canEdit && (
+                        <button
+                          type="button"
+                          ref={(el) => {
+                            if (el) deleteButtons.current.set(doc.id, el)
+                            else deleteButtons.current.delete(doc.id)
+                          }}
+                          onClick={() => setConfirming(doc.id)}
+                          aria-label={`Delete ${doc.filename}`}
+                          className="grid h-7 w-7 place-items-center rounded text-muted hover:bg-surface hover:text-bad"
+                        >
+                          <Trash2 size={13} aria-hidden />
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -247,6 +259,7 @@ export function DocumentSidebar(props: Props) {
       </div>
 
       <div className="border-t border-line px-5 py-3">
+        {props.footerSlot}
         {documents && documents.length > 0 && <p className="mb-2 text-xs text-muted">{scope}</p>}
         <div className="flex items-center justify-between gap-2">
           <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted">

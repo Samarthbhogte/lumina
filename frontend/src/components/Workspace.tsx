@@ -1,20 +1,33 @@
 'use client'
 
 import { Menu, SquarePen, Upload } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
+  ApiError,
   askStream,
+  deleteConversation,
   deleteDocument,
+  getConversation,
   getHealth,
+  getMe,
+  listConversations,
   listDocuments,
   uploadDocuments,
-  type AskResult,
+  type Conversation,
   type DocumentInfo,
   type Health,
-  type HistoryMessage,
+  type Me,
+  type StoredMessage,
 } from '@/lib/api'
+
+import { AccountMenu } from './AccountMenu'
+import { ConversationList } from './ConversationList'
+import { MembersDialog } from './MembersDialog'
+import { WorkspaceIdContext } from './WorkspaceContext'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 import { Composer } from './Composer'
 import { DocumentSidebar } from './DocumentSidebar'
@@ -22,8 +35,8 @@ import { MessageView } from './MessageView'
 import { SourcesPanel } from './SourcesPanel'
 import type { AssistantMessage, Message } from './types'
 
-const STORAGE_KEY = 'lumina.conversation.v1'
-const HISTORY_TURNS = 8
+const LEGACY_KEY = 'lumina.conversation.v1' // v2 kept chats in the browser; v3 keeps them on the server
+const LAST_WORKSPACE = 'lumina.lastWorkspace'
 
 const SUGGESTIONS = [
   'What is the retention period for personal data?',
@@ -38,45 +51,33 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Something w
 const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError'
 const newId = () => crypto.randomUUID()
 
-/** Restore the saved conversation, dropping anything that doesn't look like a message. */
-function loadConversation(): Message[] {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((raw): Message[] => {
-      const m = raw as Record<string, unknown>
-      if (!m || typeof m.id !== 'string' || typeof m.content !== 'string') return []
-      if (m.role === 'user') return [{ id: m.id, role: 'user', content: m.content }]
-      if (m.role !== 'assistant' || typeof m.question !== 'string') return []
-      const status = m.status === 'done' || m.status === 'error' ? m.status : 'error'
-      return [
-        {
-          id: m.id,
-          role: 'assistant',
-          content: m.content,
-          question: m.question,
-          status,
-          sources: Array.isArray(m.sources) ? m.sources : [],
-          result: m.result && typeof m.result === 'object' ? (m.result as AskResult) : undefined,
-          error: status === 'error' ? (typeof m.error === 'string' ? m.error : 'This answer was interrupted.') : undefined,
-          stopped: m.stopped === true,
-        },
-      ]
-    })
-  } catch {
-    return []
-  }
+/** Rebuild the thread from the server's record of a conversation. */
+function fromStored(stored: StoredMessage[]): Message[] {
+  let question = ''
+  return stored.map((m): Message => {
+    if (m.role === 'user') {
+      question = m.content
+      return { id: m.id, role: 'user', content: m.content }
+    }
+    return {
+      id: m.id,
+      role: 'assistant',
+      content: m.content,
+      question,
+      status: 'done',
+      sources: m.result?.sources ?? [],
+      result: m.result ?? undefined,
+    }
+  })
 }
 
-function toHistory(messages: Message[]): HistoryMessage[] {
-  return messages
-    .filter((m) => m.role === 'user' || (m.status === 'done' && !m.stopped && m.content))
-    .slice(-HISTORY_TURNS)
-    .map((m) => ({ role: m.role, content: m.content }))
-}
-
-export default function Workspace() {
-  const [messages, setMessages] = useState<Message[]>(loadConversation)
+export default function Workspace({ workspaceId }: { workspaceId: string }) {
+  const router = useRouter()
+  const [messages, setMessages] = useState<Message[]>([])
+  const [me, setMe] = useState<Me | null>(null)
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [membersOpen, setMembersOpen] = useState(false)
   const [documents, setDocuments] = useState<DocumentInfo[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
@@ -99,6 +100,8 @@ export default function Workspace() {
   const busy = messages.some((m) => m.role === 'assistant' && m.status === 'streaming')
   const aiOff = health !== null && !health.ai_configured
   const hasDocs = (documents?.length ?? 0) > 0
+  const workspace = me?.workspaces.find((w) => w.id === workspaceId) ?? null
+  const canEdit = workspace?.role === 'editor' || workspace?.role === 'owner'
 
   useEffect(() => {
     messagesRef.current = messages
@@ -107,31 +110,40 @@ export default function Workspace() {
   const refresh = useCallback(async () => {
     const id = ++refreshId.current
     try {
-      const [h, docs] = await Promise.all([getHealth(), listDocuments()])
+      const [h, who, docs, convs] = await Promise.all([
+        getHealth(),
+        getMe(),
+        listDocuments(workspaceId),
+        listConversations(workspaceId),
+      ])
       if (id !== refreshId.current) return // a newer refresh is in flight
       setHealth(h)
+      setMe(who)
       setDocuments(docs)
+      setConversations(convs)
       setLoadError(null)
       setSelected((prev) => new Set([...prev].filter((d) => docs.some((doc) => doc.id === d))))
     } catch (e) {
-      if (id === refreshId.current) setLoadError(errorText(e))
+      if (id !== refreshId.current) return
+      if (e instanceof ApiError && e.status === 401) router.replace('/login')
+      else if (e instanceof ApiError && e.status === 404) router.replace('/')  // not a member (any more)
+      else setLoadError(errorText(e))
     }
-  }, [])
+  }, [workspaceId, router])
 
   useEffect(() => {
     void refresh()
     return () => abortRef.current?.abort() // don't leave a stream running after unmount
   }, [refresh])
 
-  // Persist the conversation (not while streaming, to avoid a write per token).
   useEffect(() => {
-    if (busy) return
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-60)))
+      localStorage.removeItem(LEGACY_KEY)
+      localStorage.setItem(LAST_WORKSPACE, workspaceId)
     } catch {
       /* storage unavailable */
     }
-  }, [messages, busy])
+  }, [workspaceId])
 
   // Follow new content only while the reader is at the bottom of the thread.
   useLayoutEffect(() => {
@@ -170,15 +182,9 @@ export default function Workspace() {
     const controller = new AbortController()
     abortRef.current = controller
 
-    const current = messagesRef.current
-    let prior = current
-    if (retry) {
-      const idx = current.findIndex((m) => m.id === retry.id)
-      if (idx < 0) {
-        abortRef.current = null
-        return
-      }
-      prior = current.slice(0, Math.max(0, idx - 1)) // everything before the question being retried
+    if (retry && !messagesRef.current.some((m) => m.id === retry.id)) {
+      abortRef.current = null
+      return
     }
 
     const assistantId = retry?.id ?? newId()
@@ -195,7 +201,9 @@ export default function Workspace() {
     const docIds = [...selected].filter((id) => documents?.some((d) => d.id === id))
     try {
       await askStream(
-        { question, history: toHistory(prior), document_ids: docIds.length ? docIds : undefined },
+        workspaceId,
+        // The server rebuilds history from its record of this conversation.
+        { question, conversation_id: conversationId, document_ids: docIds.length ? docIds : undefined },
         {
           onSources: (sources) => patch(assistantId, (m) => ({ ...m, sources })),
           onToken: (text) => {
@@ -208,6 +216,8 @@ export default function Workspace() {
             frame.current = null
             pendingTokens.current = ''
             patch(assistantId, (m) => ({ ...m, content: result.answer, sources: result.sources, result, status: 'done' }))
+            if (result.conversation_id) setConversationId(result.conversation_id)
+            void refresh() // conversation list and remaining quota
             setAnnouncement(
               result.flagged || !result.found
                 ? `Answer ready. ${result.answer}`
@@ -245,7 +255,7 @@ export default function Workspace() {
     if (!pdfs.length) return
     setUploading(pdfs.map((f) => f.name))
     try {
-      const { results } = await uploadDocuments(pdfs)
+      const { results } = await uploadDocuments(workspaceId, pdfs)
       for (const r of results) {
         if (r.status === 'indexed') toast.success(`Added ${r.filename}`, { description: `${r.document?.pages} pages indexed` })
         else if (r.status === 'duplicate') toast(`${r.filename} is already in your library`)
@@ -261,10 +271,42 @@ export default function Workspace() {
 
   const remove = async (doc: DocumentInfo) => {
     try {
-      await deleteDocument(doc.id)
+      await deleteDocument(workspaceId, doc.id)
       toast(`Deleted ${doc.filename}`)
     } catch (e) {
       toast.error(`Couldn’t delete ${doc.filename}`, { description: errorText(e) })
+    } finally {
+      void refresh()
+    }
+  }
+
+  const newChat = () => {
+    setMessages([])
+    setActive(null)
+    setConversationId(null)
+  }
+
+  const openConversation = async (id: string) => {
+    if (busy) return
+    try {
+      const conv = await getConversation(workspaceId, id)
+      setMessages(fromStored(conv.messages))
+      setConversationId(conv.id)
+      setActive(null)
+      setDrawerOpen(false)
+      stuckToBottom.current = true
+    } catch (e) {
+      toast.error('Couldn’t open that chat', { description: errorText(e) })
+    }
+  }
+
+  const removeConversation = async (c: Conversation) => {
+    if (!window.confirm(`Delete the chat “${c.title}”? Its recorded answers are deleted too.`)) return
+    try {
+      await deleteConversation(workspaceId, c.id)
+      if (c.id === conversationId) newChat()
+    } catch (e) {
+      toast.error('Couldn’t delete the chat', { description: errorText(e) })
     } finally {
       void refresh()
     }
@@ -310,10 +352,31 @@ export default function Workspace() {
         void refresh()
       }}
       onClose={onClose}
+      canEdit={canEdit}
+      workspaceSlot={
+        me && workspace ? (
+          <WorkspaceSwitcher workspaces={me.workspaces} current={workspace} onManage={() => setMembersOpen(true)} />
+        ) : null
+      }
+      chatsSlot={
+        <ConversationList
+          conversations={conversations}
+          activeId={conversationId}
+          busy={busy}
+          onOpen={(id) => void openConversation(id)}
+          onNew={() => {
+            newChat()
+            setDrawerOpen(false)
+          }}
+          onDelete={(c) => void removeConversation(c)}
+        />
+      }
+      footerSlot={me ? <AccountMenu me={me} /> : null}
     />
   )
 
   return (
+    <WorkspaceIdContext.Provider value={workspaceId}>
     <div className="flex h-dvh overflow-hidden">
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
@@ -352,10 +415,7 @@ export default function Workspace() {
             <button
               type="button"
               disabled={busy}
-              onClick={() => {
-                setMessages([])
-                setActive(null)
-              }}
+              onClick={newChat}
               className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-ink disabled:opacity-50"
             >
               <SquarePen size={15} aria-hidden /> New chat
@@ -387,7 +447,11 @@ export default function Workspace() {
                   </p>
                 ) : loadError ? (
                   <p className="mt-6 rounded-lg bg-bad-soft p-3 text-sm text-bad">{loadError}</p>
-                ) : documents === null ? null : !hasDocs ? (
+                ) : documents === null ? null : !hasDocs && !canEdit ? (
+                  <p className="mt-6 rounded-lg bg-surface-2 p-3 text-sm text-muted">
+                    This workspace has no documents yet. Ask an editor or owner to add some.
+                  </p>
+                ) : !hasDocs ? (
                   <>
                     <button
                       type="button"
@@ -470,5 +534,9 @@ export default function Workspace() {
         />
       </aside>
     </div>
+    {workspace?.role === 'owner' && workspace.kind === 'team' && (
+      <MembersDialog workspaceId={workspaceId} open={membersOpen} onClose={() => setMembersOpen(false)} />
+    )}
+    </WorkspaceIdContext.Provider>
   )
 }
