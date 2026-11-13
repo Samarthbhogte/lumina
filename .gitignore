@@ -123,7 +123,7 @@ frontend/.idea/
 *.bak
 *.tar
 docker-compose.override.yml
-.dockerignore
+# .dockerignore files are part of the build and are committed
 
 ############################
 # 📊 PROJECT / MISC
