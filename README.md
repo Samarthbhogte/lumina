@@ -70,7 +70,7 @@ backend/.venv/bin/uvicorn backend.main:app --reload --port 8000
 cd frontend && npm install && npm run dev
 ```
 
-Open http://localhost:3000. The first visit shows **Create the admin account**. That account
+Open the web app in your browser (port 3000). The first visit shows **Create the admin account**. That account
 adopts any library left from Lumina v2, after a backup is taken.
 
 To load the five sample policies into your personal workspace:
